@@ -1,0 +1,5 @@
+*.pyc
+results/
+.vscode/
+checkpoints_dense/
+utils/MoGe/

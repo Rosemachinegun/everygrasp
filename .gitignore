@@ -1,0 +1,11 @@
+# model weights
+model/
+captures/
+
+
+# python cache
+__pycache__/
+*.pyc
+model/
+__pycache__/
+*.pyc

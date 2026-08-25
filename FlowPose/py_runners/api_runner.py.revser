@@ -1,0 +1,222 @@
+import numpy as np
+import torch
+import sys, os
+from typing import Optional, Tuple
+
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+from dataset.infer_loader import get_infer_dataloader
+from utils.transforms.rotation import matrix_to_euler_angles, eulerZYX_to_matrix
+
+_EX_T = torch.tensor(
+    [[0, -0.707, 0.707], [-1, 0, 0], [0, -0.707, -0.707]],
+    dtype=torch.float32,
+)
+
+# return combined mask and obj_ids (list of [mask_label, box_id])
+def _build_obj_ids(mask: np.ndarray) -> list:
+    unique_ids = np.unique(mask)
+    unique_ids = unique_ids[(unique_ids != 0) & (unique_ids != 255)]
+    return [[int(mid), int(mid)] for mid in unique_ids]
+
+
+def _pose_to_euler_zyx(pose: torch.Tensor) -> torch.Tensor:
+    if pose.ndim == 2:
+        pose = pose.unsqueeze(0)
+    return matrix_to_euler_angles(pose[:, :3, :3].to(torch.float32), "ZYX")
+
+
+def _calibrate_pose(pose_mats):
+    pose_t = torch.as_tensor(pose_mats, dtype=torch.float32).clone()
+    if pose_t.ndim == 2:
+        pose_t = pose_t.unsqueeze(0)
+        squeeze_out = True
+    else:
+        squeeze_out = False
+
+    ex_t = _EX_T.to(device=pose_t.device, dtype=pose_t.dtype)
+    for i in range(pose_t.shape[0]):
+        bb = pose_t[i].clone()
+        bb[:3, :3] = ex_t @ bb[:3, :3]
+        angle_x = _pose_to_euler_zyx(bb)[0, 0]
+
+        adjusted_r = torch.eye(3, device=pose_t.device, dtype=pose_t.dtype)
+        if angle_x < -torch.pi / 2:
+            adjusted_r = eulerZYX_to_matrix(
+                torch.tensor([[torch.pi, 0, 0]], device=pose_t.device, dtype=pose_t.dtype)
+            )[0]
+        if angle_x > torch.pi / 2:
+            adjusted_r = eulerZYX_to_matrix(
+                torch.tensor([[-torch.pi, 0, 0]], device=pose_t.device, dtype=pose_t.dtype)
+            )[0]
+
+        pose_t[i, :3, :3] = ex_t.transpose(0, 1) @ adjusted_r @ ex_t @ pose_t[i, :3, :3]
+
+    return pose_t[0] if squeeze_out else pose_t
+
+
+def _normalize_vec(vec: torch.Tensor, fallback: torch.Tensor) -> torch.Tensor:
+    norm = torch.linalg.norm(vec)
+    if bool(norm < 1e-6):
+        return fallback / torch.linalg.norm(fallback)
+    return vec / norm
+
+
+def _rotation_about_z(angle_rad: float, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    angle = torch.tensor(angle_rad, device=device, dtype=dtype)
+    cos_a = torch.cos(angle)
+    sin_a = torch.sin(angle)
+    zero = torch.zeros((), device=device, dtype=dtype)
+    one = torch.ones((), device=device, dtype=dtype)
+    return torch.stack(
+        [
+            torch.stack([cos_a, -sin_a, zero]),
+            torch.stack([sin_a, cos_a, zero]),
+            torch.stack([zero, zero, one]),
+        ]
+    )
+
+
+def _reverse_correct_rotation_world(
+    rot_world: torch.Tensor,
+    *,
+    arm: Optional[str] = None,
+    z_thresh_deg: float = 20.0,
+    x_thresh_deg: float = 90.0,
+) -> torch.Tensor:
+    device = rot_world.device
+    dtype = rot_world.dtype
+    z_up = torch.tensor([0.0, 0.0, 1.0], device=device, dtype=dtype)
+    x_forward = torch.tensor([1.0, 0.0, 0.0], device=device, dtype=dtype)
+
+    z_axis = _normalize_vec(rot_world[:, 2], z_up)
+    cos_z = torch.clamp(torch.dot(z_axis, z_up), -1.0, 1.0)
+    angle_z_deg = torch.acos(cos_z) * (180.0 / np.pi)
+
+    if bool(angle_z_deg > z_thresh_deg):
+        new_z = z_up
+        old_x = rot_world[:, 0]
+        new_x = old_x - torch.dot(old_x, new_z) * new_z
+        new_x = _normalize_vec(new_x, x_forward)
+        new_y = _normalize_vec(
+            torch.cross(new_z, new_x, dim=0),
+            torch.tensor([0.0, 1.0, 0.0], device=device, dtype=dtype),
+        )
+        rot_world = torch.column_stack([new_x, new_y, new_z])
+
+    x_axis = _normalize_vec(rot_world[:, 0], x_forward)
+    cos_x = torch.clamp(torch.dot(x_axis, x_forward), -1.0, 1.0)
+    angle_x_deg = torch.acos(cos_x) * (180.0 / np.pi)
+
+    if bool(angle_x_deg > x_thresh_deg):
+        new_x = -x_axis
+        new_z = rot_world[:, 2]
+        new_y = _normalize_vec(
+            torch.cross(new_z, new_x, dim=0),
+            torch.tensor([0.0, 1.0, 0.0], device=device, dtype=dtype),
+        )
+        new_z = _normalize_vec(torch.cross(new_x, new_y, dim=0), z_up)
+        rot_world = torch.column_stack([new_x, new_y, new_z])
+
+    x_axis_final = _normalize_vec(rot_world[:, 0], x_forward)
+    rotation_direction = torch.cross(x_forward, x_axis_final, dim=0)[2]
+
+    if arm == "right" and bool(rotation_direction < 0):
+        rot_world = rot_world @ _rotation_about_z(np.pi / 2, device=device, dtype=dtype)
+    elif arm == "left" and bool(rotation_direction > 0):
+        rot_world = rot_world @ _rotation_about_z(-np.pi / 2, device=device, dtype=dtype)
+
+    return rot_world
+
+
+def _reverse_preview_pose(pose_mats, arm: Optional[str] = None):
+    pose_t = torch.as_tensor(pose_mats, dtype=torch.float32).clone()
+    input_is_numpy = isinstance(pose_mats, np.ndarray)
+    if pose_t.ndim == 2:
+        pose_t = pose_t.unsqueeze(0)
+        squeeze_out = True
+    else:
+        squeeze_out = False
+
+    ex_t = _EX_T.to(device=pose_t.device, dtype=pose_t.dtype)
+    for i in range(pose_t.shape[0]):
+        rot_world = ex_t @ pose_t[i, :3, :3]
+        rot_world = _reverse_correct_rotation_world(rot_world, arm=arm)
+        pose_t[i, :3, :3] = ex_t.transpose(0, 1) @ rot_world
+
+    out = pose_t[0] if squeeze_out else pose_t
+    return out.detach().cpu().numpy() if input_is_numpy else out
+
+
+# PoseInferece Object
+class PoseInferenceSession:
+
+    # PoseInference Constructor
+    def __init__(
+        self,
+        flow,
+        args,
+        intrinsics: Optional[dict] = None,
+    ) -> None:
+        self.args = args
+        # self.flow = Flow(args=self.args)
+        self.flow = flow
+        default_intrinsics = {
+            "fx": 606.5540161132812,
+            "fy": 606.3988647460938,
+            "cx": 325.6007080078125,
+            "cy": 252.87457275390625,
+            "width": 640,
+            "height": 480
+        }
+        self.intrinsics = intrinsics or default_intrinsics
+        self.enable_tracking = self.args.enable_tracking
+        self.frame_idx = 0
+
+    # Inference Function
+    def infer(
+        self,
+        dino_loader,
+        rgb: np.ndarray,
+        depth: np.ndarray,
+        mask: np.ndarray,
+        obj_ids: Optional[list] = None,
+        frame_idx: Optional[int] = None,
+        depth_scale: float = 0.001,
+        arm: Optional[str] = None,
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        
+        obj_ids = obj_ids or []
+        if len(obj_ids) == 0:
+            obj_ids = _build_obj_ids(mask)
+        
+        frame_data = {
+            "color": rgb,
+            "depth": (depth.astype(np.float32) * depth_scale * 1000.0).astype(np.uint16), # legacy depth scaling (Mr.Kang)
+            "mask": mask,
+        }
+
+        intr = {
+            "fx": self.intrinsics["fx"], "fy": self.intrinsics["fy"],
+            "cx": self.intrinsics["cx"], "cy": self.intrinsics["cy"],
+            "width": self.intrinsics["width"], "height": self.intrinsics["height"]
+        }
+        data = get_infer_dataloader(frame_data, self.args, intrinsics=intr)
+
+        idx = self.frame_idx
+        # print("Frame: ", idx)
+
+        if self.args.enable_tracking:
+            pose, length = self.flow.inference(data, dino_loader=dino_loader, obj_ids=obj_ids, frame_idx=idx, enable_tracking=True)
+        else:
+            pose, length = self.flow.inference(data, dino_loader=dino_loader, obj_ids=obj_ids, frame_idx=idx, enable_tracking=False)
+
+        self.frame_idx = idx + 1
+
+        if not pose or not length or pose[0] is None or length[0] is None:
+            print("Inference failed for frame_idx:", idx)
+            return None, None
+
+        pose[0] = _reverse_preview_pose(_calibrate_pose(pose[0]), arm=arm)
+
+        return pose, length
