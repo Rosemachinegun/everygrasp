@@ -1,4 +1,4 @@
-# anygrasp 目录说明
+# everygrasp 目录说明
 
 `grasp_core/` 是当前机器人抓取项目的主体代码包。一级目录只保留顶层包文件和说明文档，所有业务代码都放在二级功能目录中。
 ![System Architecture](pipeline.png)
