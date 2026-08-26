@@ -165,11 +165,16 @@ def publish_latest_request_ik_target(
                 )
                 remaining_waypoints = pose_waypoints[grip_waypoint_index + 1 :]
                 if remaining_waypoints:
+                    lift_hold_sec = max(
+                        float(getattr(args, "grip_lift_hold_sec", 0.05)),
+                        0.0,
+                    )
                     count += publish_request_ik_path(
                         publisher,
                         hand,
                         remaining_waypoints,
                         args,
+                        final_hold_sec=lift_hold_sec,
                     )
             position, orientation = pose_waypoints[-1]
             used_pick_template = True
@@ -342,10 +347,14 @@ def execute_grip_at_pose(
         float(getattr(args, "grip_settle_sec", DEFAULT_GRIP_SETTLE_SEC)), 0.0
     )
     pre_grip_hold_sec = max(settle_sec, 0.05)
+    post_confirm_hold_sec = max(
+        float(getattr(args, "grip_post_confirm_hold_sec", 0.0)),
+        0.0,
+    )
     print(
         "[grip] holding target before close "
         f"hand={hand} pre_hold={pre_grip_hold_sec:.2f}s "
-        f"post_hold={settle_sec:.2f}s",
+        f"post_confirm_hold={post_confirm_hold_sec:.2f}s",
         flush=True,
     )
     count = 0
@@ -366,4 +375,9 @@ def execute_grip_at_pose(
         raise GripCommandFailed(gripper_status)
     if on_grip_confirmed is not None:
         on_grip_confirmed(hand, gripper_status)
-    return count + publisher.hold_target(hand, position, orientation, settle_sec)
+    return count + publisher.hold_target(
+        hand,
+        position,
+        orientation,
+        post_confirm_hold_sec,
+    )

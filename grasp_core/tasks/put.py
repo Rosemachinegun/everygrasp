@@ -21,7 +21,7 @@ FIXED_PUT_RIGHT_XYZ = (0.54, -0.30, 0.826)
 FIXED_PUT_LEFT_XYZ = (0.559, 0.350, 0.772)
 FIXED_PUT_OBJECT_XYZ = {
     "yellow_cube": (0.40, -0.40, 0.86),
-    "yellow_duck": (0.40, -0.45, 0.86),
+    "yellow_duck": (0.37, -0.40, 0.83),
     "blue_cube": (0.35, -0.35, 0.83),
 }
 

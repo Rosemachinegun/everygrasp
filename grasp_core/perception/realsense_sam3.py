@@ -190,6 +190,31 @@ class RealSenseD435:
             raise RuntimeError("RealSense pipeline is not opened.")
 
         frames = self.pipeline.wait_for_frames(timeout_ms)
+        return self._bundle_from_frames(frames)
+
+    def read_latest(
+        self,
+        timeout_ms: int = 1000,
+        max_drain_frames: int = 30,
+    ) -> CaptureBundle | None:
+        """Read a frame, then drain already-buffered frames and return the newest."""
+        if self.pipeline is None:
+            raise RuntimeError("RealSense pipeline is not opened.")
+
+        latest = self.read(timeout_ms)
+        for _ in range(max(max_drain_frames - 1, 0)):
+            frames = self.pipeline.poll_for_frames()
+            if not frames:
+                break
+            bundle = self._bundle_from_frames(frames)
+            if bundle is not None:
+                latest = bundle
+        return latest
+
+    def _bundle_from_frames(self, frames) -> CaptureBundle | None:
+        if self.align is None or self.intrinsics is None:
+            raise RuntimeError("RealSense pipeline is not opened.")
+
         host_receive_timestamp_ns = time.time_ns()
         aligned = self.align.process(frames)
         color_frame = aligned.get_color_frame()

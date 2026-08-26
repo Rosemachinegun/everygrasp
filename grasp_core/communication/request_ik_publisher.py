@@ -272,6 +272,7 @@ class RequestIkTargetPublisher:
         max_step_deg: float = 3.0,
         min_steps: int = 1,
         on_after_waypoint: dict[int, WaypointCallback] | None = None,
+        final_hold_sec: float | None = None,
     ) -> int:
         if not waypoints:
             return 0
@@ -340,6 +341,7 @@ class RequestIkTargetPublisher:
                     final_position=trajectory.raw_waypoints[waypoint_index + 1][0],
                     final_orientation=trajectory.raw_waypoints[waypoint_index + 1][1],
                     hold_final=is_last_segment,
+                    final_hold_sec=final_hold_sec,
                 )
                 current_position, current_orientation = trajectory.raw_waypoints[
                     waypoint_index + 1
@@ -386,7 +388,10 @@ class RequestIkTargetPublisher:
                     current_orientation,
                 )
 
-        hold_deadline = time.monotonic() + self.publish_sec
+        path_final_hold_sec = self.publish_sec
+        if final_hold_sec is not None:
+            path_final_hold_sec = max(float(final_hold_sec), 0.0)
+        hold_deadline = time.monotonic() + path_final_hold_sec
         while self.client.ok() and time.monotonic() < hold_deadline:
             self.client.publish_pose(hand, current_position, current_orientation)
             total_count += 1
@@ -432,6 +437,7 @@ class RequestIkTargetPublisher:
         final_position: np.ndarray,
         final_orientation: tuple[float, float, float, float],
         hold_final: bool = True,
+        final_hold_sec: float | None = None,
     ) -> int:
         if not samples:
             return 0
@@ -445,12 +451,15 @@ class RequestIkTargetPublisher:
             sample_period_sec=period_sec,
         )
         time.sleep(len(samples) * period_sec)
-        if hold_final and self.publish_sec > 0.0:
+        trajectory_final_hold_sec = self.publish_sec
+        if final_hold_sec is not None:
+            trajectory_final_hold_sec = max(float(final_hold_sec), 0.0)
+        if hold_final and trajectory_final_hold_sec > 0.0:
             count += self.hold_target(
                 hand,
                 final_position,
                 final_orientation,
-                self.publish_sec,
+                trajectory_final_hold_sec,
             )
         return count
 
@@ -521,7 +530,7 @@ def build_ik_target_publisher(
             frame_id=args.ik_frame_id,
             publish_rate_hz=args.target_publish_rate_hz,
             publish_sec=args.target_publish_sec,
-            record_trajectories=should_save_request_ik_trajectory_plot(args),
+            record_trajectories=should_visualize_grasp_path(args),
             command_mode=args.target_command_mode,
             left_trajectory_topic=args.left_trajectory_topic,
             right_trajectory_topic=args.right_trajectory_topic,
@@ -543,7 +552,7 @@ def build_ik_target_publisher(
         f"speed<={args.target_trajectory_speed_mps:.3f}m/s/"
         f"{args.target_trajectory_angular_speed_dps:.1f}deg/s, "
         f"min_steps={int(args.target_trajectory_min_steps)}, "
-        f"visualize_grasp_path={should_save_request_ik_trajectory_plot(args)}, "
+        f"visualize_grasp_path={should_visualize_grasp_path(args)}, "
 
         f"hold={args.target_publish_sec:.2f}s@{args.target_publish_rate_hz:.1f}Hz",
         flush=True,
@@ -557,7 +566,7 @@ def save_request_ik_grasp_path_artifacts(
     hand: str,
     args: argparse.Namespace,
 ) -> GraspPathArtifacts | None:
-    if not should_save_request_ik_trajectory_plot(args):
+    if not should_visualize_grasp_path(args):
         print("[grasp_path] visualization disabled; skip CSV/plot", flush=True)
         return None
 
@@ -628,11 +637,19 @@ def save_request_ik_trajectory_plot(
     return save_request_ik_grasp_path_plot(publisher, target, hand, args)
 
 
-def should_save_request_ik_trajectory_plot(args: argparse.Namespace) -> bool:
+def should_visualize_grasp_path(args: argparse.Namespace) -> bool:
+    """Single switch for grasp path CSV/PNG recording and rendering."""
+
     value = getattr(args, "visualize_grasp_path", None)
     if value is None:
         value = getattr(args, "target_trajectory_plot", True)
     return bool(value)
+
+
+def should_save_request_ik_trajectory_plot(args: argparse.Namespace) -> bool:
+    """Backward-compatible wrapper; use should_visualize_grasp_path()."""
+
+    return should_visualize_grasp_path(args)
 
 
 def prepare_request_ik_trajectory_plot_data(
@@ -1056,11 +1073,24 @@ def publish_request_ik_path(
     start_position_xyz: np.ndarray | None = None,
     start_orientation_xyzw: tuple[float, float, float, float] | None = None,
     on_after_waypoint: dict[int, WaypointCallback] | None = None,
+    final_hold_sec: float | None = None,
 ) -> int:
     if not bool(getattr(args, "target_smooth_trajectory", True)):
         count = 0
         for waypoint_index, (position, orientation) in enumerate(waypoints):
-            count += publisher.publish_target(hand, position, orientation)
+            if (
+                final_hold_sec is not None
+                and waypoint_index == len(waypoints) - 1
+                and float(final_hold_sec) != publisher.publish_sec
+            ):
+                original_publish_sec = publisher.publish_sec
+                publisher.publish_sec = max(float(final_hold_sec), 0.0)
+                try:
+                    count += publisher.publish_target(hand, position, orientation)
+                finally:
+                    publisher.publish_sec = original_publish_sec
+            else:
+                count += publisher.publish_target(hand, position, orientation)
             if on_after_waypoint is not None and waypoint_index in on_after_waypoint:
                 count += on_after_waypoint[waypoint_index](
                     publisher,
@@ -1079,6 +1109,7 @@ def publish_request_ik_path(
         max_step_deg=max_step_deg,
         min_steps=int(getattr(args, "target_trajectory_min_steps", 1)),
         on_after_waypoint=on_after_waypoint,
+        final_hold_sec=final_hold_sec,
     )
 
 

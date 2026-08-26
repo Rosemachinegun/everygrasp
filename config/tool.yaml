@@ -1,6 +1,6 @@
 defaults:
   force_object_z: true
-  forced_object_z_m: 0.71
+  forced_object_z_m: 0.705
   pregrasp_distance_m: 0.05
   lift_distance_m: 0.08
   approach_axis: z
@@ -14,7 +14,7 @@ defaults:
   ik_downward_tilt_axis: z
   ik_downward_tilt_y_deg: 45.0
   ik_downward_tilt_frame: local
-  visualize_grasp_path: true
+  visualize_grasp_path:   True
 
 templates:
   saw:
@@ -499,6 +499,6 @@ templates:
 #      - [-0.07, 0.03, 0.10, 0.0, 0.0, 0.0, 1.0]
  #     - [-0.05, 0.00, 0.05, 0.0, 0.0, 0.0,  1.0]
       - [-0.02, 0.03, 0.03, 0.0, 0.0, 0.0,  1.0]
-      - [-0.04, 0.03, 0.12, 0.0, 0.0, 0.0,  1.0]
-      gripper_state: [ 1.0, 0.0]
-      time: [0.0, 0.1, ]
+#      - [-0.04, 0.03, 0.12, 0.0, 0.0, 0.0,  1.0]
+      gripper_state: [ 1.0, ]
+      time: [0.0, ]

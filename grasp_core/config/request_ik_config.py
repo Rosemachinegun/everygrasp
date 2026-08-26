@@ -52,6 +52,8 @@ class GripSignalDefaults:
     command_timeout_sec: float = 60.0
     receiver_path: Path = PROJECT_ROOT / "daimon_stuff" / "grip_signal_receiver.py"
     settle_sec: float = 0.05
+    post_confirm_hold_sec: float = 0.0
+    lift_hold_sec: float = 0.05
     retry_max_attempts: int = 3
 
 
@@ -115,8 +117,8 @@ class TargetTrajectoryDefaults:
     step_m: float = 0.005
     step_deg: float = 1.0
     min_steps: int = 15
-    speed_mps: float = 0.13
-    angular_speed_dps: float = 30.0
+    speed_mps: float = 0.15
+    angular_speed_dps: float = 35.0
     plot_dir: Path = PROJECT_ROOT / "captures" / "request_ik_trajectories"
 
 
@@ -356,10 +358,9 @@ def apply_grasp_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
     for field_name, config_value in config.__dict__.items():
         if getattr(args, field_name, None) is None:
             setattr(args, field_name, config_value)
-    if getattr(args, "target_trajectory_plot", None) is None:
-        args.target_trajectory_plot = bool(args.visualize_grasp_path)
-    else:
+    if getattr(args, "target_trajectory_plot", None) is not None:
         args.visualize_grasp_path = bool(args.target_trajectory_plot)
+    args.target_trajectory_plot = bool(args.visualize_grasp_path)
     print(
         "[grasp_config] defaults "
         f"source={args.tool_template_path} "
@@ -395,6 +396,12 @@ def normalize_gripper_args(args: argparse.Namespace) -> argparse.Namespace:
     args.gripper_timeout = max(float(args.gripper_timeout), 0.1)
     args.gripper_grip_done_wait = max(float(args.gripper_grip_done_wait), 0.0)
     args.gripper_release_wait = max(float(args.gripper_release_wait), 0.0)
+    args.grip_settle_sec = max(float(args.grip_settle_sec), 0.0)
+    args.grip_post_confirm_hold_sec = max(
+        float(args.grip_post_confirm_hold_sec),
+        0.0,
+    )
+    args.grip_lift_hold_sec = max(float(args.grip_lift_hold_sec), 0.0)
     args.gripper_calibration_tolerance = max(
         int(args.gripper_calibration_tolerance),
         0,
@@ -980,7 +987,25 @@ def parse_args() -> argparse.Namespace:
         "--grip-settle-sec",
         type=float,
         default=GRIP_SIGNAL_DEFAULTS.settle_sec,
-        help="Seconds to pause at the lowest pick waypoint after sending grip.",
+        help="Minimum seconds to hold the lowest pick waypoint before sending grip.",
+    )
+    parser.add_argument(
+        "--grip-post-confirm-hold-sec",
+        type=float,
+        default=GRIP_SIGNAL_DEFAULTS.post_confirm_hold_sec,
+        help=(
+            "Seconds to hold the grasp pose after the gripper confirms success. "
+            "Keep this low to start the put motion immediately after contact."
+        ),
+    )
+    parser.add_argument(
+        "--grip-lift-hold-sec",
+        type=float,
+        default=GRIP_SIGNAL_DEFAULTS.lift_hold_sec,
+        help=(
+            "Seconds to hold after the post-grip lift waypoint before auto put. "
+            "This only affects the intermediate lift after a confirmed grasp."
+        ),
     )
     parser.add_argument(
         "--grip-retry-loop",

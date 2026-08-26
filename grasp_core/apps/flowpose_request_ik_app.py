@@ -64,9 +64,7 @@ from grasp_core.planning.tool_pick_templates import load_tool_pick_templates  # 
 
 # OpenCV returns a single byte for keyboard input, so normalize to lowercase once.
 KEY_QUIT = {ord("q"), 27}
-KEY_CAPTURE = ord("r")
-KEY_FLOWPOSE = ord("f")
-KEY_TARGET = ord("s")
+KEY_RUN_PIPELINE = ord("a")
 KEY_RIGHT_HOME = ord("h")
 KEY_LEFT_HOME = ord("j")
 KEY_GRIP = ord("l")
@@ -81,6 +79,14 @@ class RetryStage(str, Enum):
     IDLE = "idle"
     RECOVERY = "recovery"
     RECAPTURE = "recapture"
+    SAM3 = "sam3"
+    FLOWPOSE = "flowpose"
+
+
+class PipelineStage(str, Enum):
+    """Stages for the one-key capture -> FlowPose -> grasp workflow."""
+
+    IDLE = "idle"
     SAM3 = "sam3"
     FLOWPOSE = "flowpose"
 
@@ -103,6 +109,7 @@ class RuntimeState:
     retry_attempts: int = 0
     retry_will_regrasp: bool = False
     replan_pending: bool = False
+    pipeline_stage: PipelineStage = PipelineStage.IDLE
     grasp_confirmed: bool = False
     grasp_confirmed_hand: str | None = None
     grasp_confirmed_label: str | None = None
@@ -329,7 +336,7 @@ class GraspDemoApp:
     def submit_flowpose(self, *, retry: bool = False) -> None:
         """Submit FlowPose for the latest completed SAM3 result."""
         if self.state.sam_result is None:
-            self.state.status = "Run SAM3 first: press R and wait for result"
+            self.state.status = "Run SAM3 first and wait for result"
             print(f"[FlowPose] {self.state.status}", flush=True)
             return
 
@@ -396,7 +403,7 @@ class GraspDemoApp:
         result = self.robot_actions.publish_grasp(self.state.base_targets)
         self.state.status = result.status
 
-        if result.failed_min_limit:
+        if result.failed_min_limit or not result.ok:
             self.state.grasp_confirmed = False
             self.state.grasp_confirmed_hand = None
             self.state.grasp_confirmed_label = None
@@ -457,6 +464,7 @@ class GraspDemoApp:
     ) -> None:
         """Return the failed hand home and release the gripper in parallel."""
         s = self.state
+        s.pipeline_stage = PipelineStage.IDLE
 
         if not bool(getattr(self.args, "grip_retry_loop", True)):
             s.status = f"{failed_status}; retry loop disabled"
@@ -493,10 +501,7 @@ class GraspDemoApp:
             if s.retry_will_regrasp
             else f"retry limit reached ({max_attempts})"
         )
-        s.status = (
-            f"Grip failed at min limit; returning {hand} home and releasing in parallel; "
-            f"{retry_text}"
-        )
+        s.status = f"Grip failed; returning {hand} home and releasing in parallel; {retry_text}"
         print(f"[grip_retry] {s.status}", flush=True)
 
     def _collect_recovery_results(self) -> bool:
@@ -593,6 +598,58 @@ class GraspDemoApp:
             )
             self.publish_grasp()
 
+    def start_pipeline(self) -> None:
+        """Start one-key capture -> SAM3 -> FlowPose -> grasp sequence."""
+        s = self.state
+        if (
+            s.pipeline_stage is not PipelineStage.IDLE
+            or is_pending(s.sam_future)
+            or is_pending(s.flowpose_future)
+            or s.retry_stage is not RetryStage.IDLE
+            or bool(s.recovery_futures)
+        ):
+            s.status = "Pipeline already running"
+            return
+
+        bundle = self.camera.read_latest()
+        if bundle is None:
+            s.status = "Pipeline stopped: failed to capture fresh frame"
+            return
+
+        self.reset_retry(reset_attempts=True)
+        s.pipeline_stage = PipelineStage.SAM3
+        self.submit_sam3(bundle)
+        if s.sam_future is None:
+            s.pipeline_stage = PipelineStage.IDLE
+
+    def advance_pipeline(self) -> None:
+        """Advance the one-key workflow as soon as each async result is ready."""
+        s = self.state
+
+        if s.pipeline_stage is PipelineStage.SAM3:
+            if is_pending(s.sam_future):
+                return
+            if s.sam_result is None:
+                s.pipeline_stage = PipelineStage.IDLE
+                s.status = "Pipeline stopped: SAM3 produced no result"
+                return
+
+            s.pipeline_stage = PipelineStage.FLOWPOSE
+            self.submit_flowpose()
+            if s.flowpose_future is None:
+                s.pipeline_stage = PipelineStage.IDLE
+            return
+
+        if s.pipeline_stage is PipelineStage.FLOWPOSE:
+            if is_pending(s.flowpose_future):
+                return
+            s.pipeline_stage = PipelineStage.IDLE
+            if not s.base_targets:
+                s.status = "Pipeline stopped: FlowPose produced no target"
+                return
+
+            self.publish_grasp()
+
     def render(self, bundle) -> None:
         """Render the live camera, SAM3 overlay and FlowPose overlay."""
         live_panel = draw_live_hud(
@@ -618,15 +675,8 @@ class GraspDemoApp:
         if key in KEY_QUIT:
             return False
 
-        if key == KEY_CAPTURE:
-            self.reset_retry(reset_attempts=True)
-            self.submit_sam3(bundle)
-        elif key == KEY_FLOWPOSE:
-            self.reset_retry()
-            self.submit_flowpose()
-        elif key == KEY_TARGET:
-            self.reset_retry(reset_attempts=True)
-            self.publish_grasp()
+        if key == KEY_RUN_PIPELINE:
+            self.start_pipeline()
         elif key == KEY_RIGHT_HOME:
             self.state.last_gripper_hand = "right"
             if self.robot_actions is not None:
@@ -649,12 +699,13 @@ class GraspDemoApp:
         cv2.namedWindow(DASHBOARD_WINDOW, cv2.WINDOW_NORMAL)
 
         while True:
-            bundle = self.camera.read()
+            bundle = self.camera.read_latest()
             if bundle is None:
                 print("[camera] failed to read frame; retrying...", flush=True)
                 continue
 
             self.collect_inference_results()
+            self.advance_pipeline()
             self._collect_gripper_result()
             self.update_recovery()
            # self.advance_replan_state(bundle)
