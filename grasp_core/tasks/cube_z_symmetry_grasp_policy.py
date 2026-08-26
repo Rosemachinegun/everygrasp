@@ -15,6 +15,8 @@ RIGHT_GRASP_SECTOR_DEG = (210.0, 300.0)
 LEFT_FALLBACK_ANGLE_DEG = 105.0
 RIGHT_FALLBACK_ANGLE_DEG = 255.0
 HAND_SIDE_EPS = 1e-8
+YELLOW_DUCK_OBJECT_TYPE = "yellow_duck"
+WORLD_Z_AXIS = np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
 
 
 @dataclass(frozen=True)
@@ -54,12 +56,11 @@ def apply_cube_z_symmetry_grasp_policy(
     del relative_pick_waypoints
     if not bool(getattr(args, "use_cube_z_symmetry_grasp_policy", False)):
         return None
-    if not is_cube_like_object(target.label):
-        return None
-
     object_pose = np.asarray(target.base_pose, dtype=np.float64)
     if object_pose.shape != (4, 4) or not np.all(np.isfinite(object_pose)):
         return None
+    if is_yellow_duck_object(target.label):
+        object_pose = pose_with_world_z_axis(object_pose)
 
     candidates = tuple(make_candidates(object_pose))
     raw = candidates[0]
@@ -91,6 +92,43 @@ def apply_cube_z_symmetry_grasp_policy(
         raw_candidate=raw,
         desired_y_sign=desired_y_sign,
     )
+
+
+def is_yellow_duck_object(object_type: str) -> bool:
+    return normalize_object_type(object_type) == YELLOW_DUCK_OBJECT_TYPE
+
+
+def pose_with_world_z_axis(object_pose: np.ndarray) -> np.ndarray:
+    pose = np.asarray(object_pose, dtype=np.float64).copy()
+    x_axis = horizontal_unit_vector(pose[:3, 0])
+    if x_axis is None:
+        y_axis = horizontal_unit_vector(pose[:3, 1])
+        if y_axis is None:
+            x_axis = np.asarray([1.0, 0.0, 0.0], dtype=np.float64)
+            y_axis = np.asarray([0.0, 1.0, 0.0], dtype=np.float64)
+        else:
+            x_axis = normalized(np.cross(y_axis, WORLD_Z_AXIS))
+    else:
+        y_axis = normalized(np.cross(WORLD_Z_AXIS, x_axis))
+    x_axis = normalized(np.cross(y_axis, WORLD_Z_AXIS))
+    pose[:3, :3] = np.column_stack((x_axis, y_axis, WORLD_Z_AXIS))
+    return pose
+
+
+def horizontal_unit_vector(vector: np.ndarray) -> np.ndarray | None:
+    projected = np.asarray(vector, dtype=np.float64).copy()
+    projected[2] = 0.0
+    norm = float(np.linalg.norm(projected))
+    if norm < 1e-8:
+        return None
+    return projected / norm
+
+
+def normalized(vector: np.ndarray) -> np.ndarray:
+    norm = float(np.linalg.norm(vector))
+    if norm < 1e-8:
+        raise ValueError("cannot normalize near-zero vector")
+    return np.asarray(vector, dtype=np.float64) / norm
 
 
 def make_candidates(object_pose: np.ndarray) -> list[CubeZSymmetryCandidate]:
@@ -227,16 +265,3 @@ def local_z_rotation_deg(angle_deg: float) -> np.ndarray:
         ],
         dtype=np.float64,
     )
-
-def is_cube_like_object(object_type: str) -> bool:
-    name = normalize_object_type(object_type)
-    if name in {
-        "blue_block",
-        "blue_cube",
-        "block",
-        "cube",
-        "box",
-        "cuboid",
-    }:
-        return True
-    return bool({"block", "cube", "box", "cuboid"} & set(name.split("_")))

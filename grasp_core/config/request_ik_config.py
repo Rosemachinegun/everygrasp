@@ -69,7 +69,7 @@ class GripperDefaults:
     connect_timeout_sec: float = 2.0
     connect_retry_delay_sec: float = 0.2
     allow_homing_fallback: bool = True
-    min_pos: int = 300
+    min_pos: int = 100
     max_pos: int = 1000
     grip_speed: int = 60
     grip_torque: int = 30
@@ -440,7 +440,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--prompts", default="yellow cube, blue cube")
+    parser.add_argument("--prompts", default="yellow cube, blue cube,yellow duck")
     parser.add_argument("--sam3-checkpoint-path", default="/model/sam3.pt")
     parser.add_argument("--sam3-root", default=None)
     parser.add_argument(

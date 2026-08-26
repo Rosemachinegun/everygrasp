@@ -9,3 +9,6 @@ __pycache__/
 model/
 __pycache__/
 *.pyc
+capture/
+__pycache__/
+*.pyc
