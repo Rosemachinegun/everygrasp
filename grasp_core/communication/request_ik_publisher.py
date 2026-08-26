@@ -107,10 +107,15 @@ class RequestIkTargetPublisher:
         hand: str,
         position_xyz: np.ndarray,
         orientation_xyzw: tuple[float, float, float, float],
+        *,
+        hold_sec: float | None = None,
     ) -> int:
         topic = self.client.topic_for_hand(hand)
         period_sec = 1.0 / self.publish_rate_hz
-        deadline = time.monotonic() + self.publish_sec
+        target_hold_sec = self.publish_sec
+        if hold_sec is not None:
+            target_hold_sec = max(float(hold_sec), 0.0)
+        deadline = time.monotonic() + target_hold_sec
         count = 0
         position = checked_position(position_xyz)
         orientation = normalize_quaternion(orientation_xyzw)
@@ -145,6 +150,7 @@ class RequestIkTargetPublisher:
         max_step_m: float = 0.01,
         max_step_deg: float = 3.0,
         min_steps: int = 1,
+        final_hold_sec: float | None = None,
     ) -> int:
         topic = self.client.topic_for_hand(hand)
         end_position = checked_position(position_xyz)
@@ -195,6 +201,7 @@ class RequestIkTargetPublisher:
                 trajectory.samples,
                 final_position=end_position,
                 final_orientation=end_orientation,
+                final_hold_sec=final_hold_sec,
             )
             self._remember_target(hand, end_position, end_orientation)
             self.node.get_logger().info(
@@ -213,7 +220,10 @@ class RequestIkTargetPublisher:
             count += 1
             time.sleep(period_sec)
 
-        hold_deadline = time.monotonic() + self.publish_sec
+        target_final_hold_sec = self.publish_sec
+        if final_hold_sec is not None:
+            target_final_hold_sec = max(float(final_hold_sec), 0.0)
+        hold_deadline = time.monotonic() + target_final_hold_sec
         while self.client.ok() and time.monotonic() < hold_deadline:
             self.client.publish_pose(hand, end_position, end_orientation)
             count += 1
@@ -1010,6 +1020,8 @@ def publish_home_request_ik_target(
     hand: str,
     home_xyz: tuple[float, float, float],
     args: argparse.Namespace,
+    *,
+    final_hold_sec: float | None = None,
 ) -> str:
     if publisher is None:
         status = "request_ik_tester publisher unavailable; check ROS2 sourcing"
@@ -1020,7 +1032,14 @@ def publish_home_request_ik_target(
     orientation = ik_wrist_orientation_quat(args)
     # Directly publish the single home target (no multi-waypoint home path)
     home_waypoints = [(position, orientation)]
-    count = publish_request_ik_target(publisher, hand, position, orientation, args)
+    count = publish_request_ik_target(
+        publisher,
+        hand,
+        position,
+        orientation,
+        args,
+        final_hold_sec=final_hold_sec,
+    )
 
     topic = args.left_target_topic if hand == "left" else args.right_target_topic
     qx, qy, qz, qw = orientation
@@ -1048,9 +1067,15 @@ def publish_request_ik_target(
     *,
     start_position_xyz: np.ndarray | None = None,
     start_orientation_xyzw: tuple[float, float, float, float] | None = None,
+    final_hold_sec: float | None = None,
 ) -> int:
     if not bool(getattr(args, "target_smooth_trajectory", True)):
-        return publisher.publish_target(hand, position, orientation)
+        return publisher.publish_target(
+            hand,
+            position,
+            orientation,
+            hold_sec=final_hold_sec,
+        )
     max_step_m, max_step_deg = effective_trajectory_step_limits(args)
     return publisher.publish_smooth_target(
         hand,
@@ -1061,6 +1086,7 @@ def publish_request_ik_target(
         max_step_m=max_step_m,
         max_step_deg=max_step_deg,
         min_steps=int(getattr(args, "target_trajectory_min_steps", 1)),
+        final_hold_sec=final_hold_sec,
     )
 
 

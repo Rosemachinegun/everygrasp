@@ -102,6 +102,12 @@ class HomeDefaults:
 
 
 @dataclass(frozen=True)
+class PutDefaults:
+    target_hold_sec: float = 0.05
+    home_hold_sec: float = 0.05
+
+
+@dataclass(frozen=True)
 class SideApproachDefaults:
     enabled: bool = False
     offset_y_m: float = 0.0   #what the
@@ -125,6 +131,7 @@ class TargetTrajectoryDefaults:
 GRIP_SIGNAL_DEFAULTS = GripSignalDefaults()
 GRIPPER_DEFAULTS = GripperDefaults()
 HOME_DEFAULTS = HomeDefaults()
+PUT_DEFAULTS = PutDefaults()
 SIDE_APPROACH_DEFAULTS = SideApproachDefaults()
 TARGET_TRAJECTORY_DEFAULTS = TargetTrajectoryDefaults()
 
@@ -402,6 +409,8 @@ def normalize_gripper_args(args: argparse.Namespace) -> argparse.Namespace:
         0.0,
     )
     args.grip_lift_hold_sec = max(float(args.grip_lift_hold_sec), 0.0)
+    args.put_target_hold_sec = max(float(args.put_target_hold_sec), 0.0)
+    args.put_home_hold_sec = max(float(args.put_home_hold_sec), 0.0)
     args.gripper_calibration_tolerance = max(
         int(args.gripper_calibration_tolerance),
         0,
@@ -1028,5 +1037,17 @@ def parse_args() -> argparse.Namespace:
             "TRUE automatically runs the fixed put action after a "
             "gripper-confirmed successful grasp; FALSE disables auto put."
         ),
+    )
+    parser.add_argument(
+        "--put-target-hold-sec",
+        type=float,
+        default=PUT_DEFAULTS.target_hold_sec,
+        help="Seconds to hold the put target before opening the gripper.",
+    )
+    parser.add_argument(
+        "--put-home-hold-sec",
+        type=float,
+        default=PUT_DEFAULTS.home_hold_sec,
+        help="Seconds to hold the home target after put release.",
     )
     return apply_grasp_config_defaults(parser.parse_args())

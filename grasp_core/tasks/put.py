@@ -89,6 +89,8 @@ def execute_fixed_put_after_grasp(
         print(f"[put] {status}", flush=True)
         return FixedPutResult(False, status)
 
+    put_target_hold_sec = max(float(getattr(args, "put_target_hold_sec", 0.05)), 0.0)
+    put_home_hold_sec = max(float(getattr(args, "put_home_hold_sec", 0.05)), 0.0)
     position = np.asarray(fixed_put_xyz_for_hand(hand, object_type), dtype=np.float64)
     orientation = ik_wrist_orientation_quat(args)
     count = publish_request_ik_target(
@@ -97,6 +99,7 @@ def execute_fixed_put_after_grasp(
         position,
         orientation,
         args,
+        final_hold_sec=put_target_hold_sec,
     )
     if publisher_stop_requested(publisher):
         status = f"STOPPED by B during {hand} put target publishing"
@@ -107,7 +110,7 @@ def execute_fixed_put_after_grasp(
         "[put] fixed put target reached "
         f"hand={hand} object={normalize_object_type(object_type) if object_type else 'default'} "
         f"xyz=({position[0]:.3f},{position[1]:.3f},{position[2]:.3f})m "
-        f"count={count}",
+        f"count={count} hold={put_target_hold_sec:.2f}s",
         flush=True,
     )
 
@@ -130,6 +133,7 @@ def execute_fixed_put_after_grasp(
         hand,
         position_for_home(hand, args),
         args,
+        final_hold_sec=put_home_hold_sec,
     )
     return FixedPutResult(True, f"{status}; {home_status}")
 
