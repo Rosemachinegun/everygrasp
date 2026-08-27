@@ -110,6 +110,7 @@ class Ros2PoseTargetPublisher:
         *,
         joint_name: str,
         sample_period_sec: float,
+        sample_periods_sec: list[float] | None = None,
     ) -> int:
         publisher = (
             self.left_trajectory_pub if hand == "left" else self.right_trajectory_pub
@@ -121,23 +122,34 @@ class Ros2PoseTargetPublisher:
             return 0
 
         period_sec = max(float(sample_period_sec), 1e-4)
+        if sample_periods_sec is None:
+            periods_sec = [period_sec] * len(samples)
+        else:
+            periods_sec = [
+                max(float(value), 1e-4) for value in sample_periods_sec[: len(samples)]
+            ]
+            if len(periods_sec) < len(samples):
+                periods_sec.extend([period_sec] * (len(samples) - len(periods_sec)))
         msg = self.MultiDOFJointTrajectory()
         msg.header.stamp = self.node.get_clock().now().to_msg()
         msg.header.frame_id = self.frame_id
         msg.joint_names = [str(joint_name)]
 
         previous_position: np.ndarray | None = None
-        for index, (position_xyz, orientation_xyzw) in enumerate(samples, start=1):
+        elapsed_sec = 0.0
+        for index, (position_xyz, orientation_xyzw) in enumerate(samples):
             point = self.MultiDOFJointTrajectoryPoint()
             position = checked_position(position_xyz)
+            point_period_sec = periods_sec[index]
+            elapsed_sec += point_period_sec
             point.transforms = [self.make_transform(position_xyz, orientation_xyzw)]
             linear_velocity = (
                 np.zeros(3, dtype=np.float64)
                 if previous_position is None
-                else (position - previous_position) / period_sec
+                else (position - previous_position) / point_period_sec
             )
             point.velocities = [self.make_linear_twist(linear_velocity)]
-            point.time_from_start = self.duration_from_seconds(index * period_sec)
+            point.time_from_start = self.duration_from_seconds(elapsed_sec)
             msg.points.append(point)
             previous_position = position.copy()
 

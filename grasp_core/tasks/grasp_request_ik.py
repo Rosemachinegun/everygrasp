@@ -138,6 +138,7 @@ def publish_latest_request_ik_target(
                     args,
                     start_position_xyz=start_position,
                     start_orientation_xyzw=start_orientation,
+                    terminal_slowdown=True,
                 )
             else:
                 print(
@@ -153,6 +154,7 @@ def publish_latest_request_ik_target(
                     args,
                     start_position_xyz=start_position,
                     start_orientation_xyzw=start_orientation,
+                    terminal_slowdown=True,
                 )
                 grasp_path_artifacts = save_request_ik_grasp_path_artifacts(
                     publisher, target, hand, args
@@ -211,6 +213,7 @@ def publish_latest_request_ik_target(
                 args,
                 start_position_xyz=start_position,
                 start_orientation_xyzw=start_orientation,
+                terminal_slowdown=True,
             )
             print(
                 "[computed_grasp] target reached; sending grip command "

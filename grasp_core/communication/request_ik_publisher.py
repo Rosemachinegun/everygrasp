@@ -201,6 +201,7 @@ class RequestIkTargetPublisher:
         max_step_deg: float = 3.0,
         min_steps: int = 1,
         final_hold_sec: float | None = None,
+        terminal_slowdown: bool = False,
     ) -> int:
         topic = self.client.topic_for_hand(hand)
         end_position = checked_position(position_xyz)
@@ -252,6 +253,7 @@ class RequestIkTargetPublisher:
                 final_position=end_position,
                 final_orientation=end_orientation,
                 final_hold_sec=final_hold_sec,
+                terminal_slowdown=terminal_slowdown,
             )
             self._remember_target(hand, end_position, end_orientation)
             self.node.get_logger().info(
@@ -262,13 +264,21 @@ class RequestIkTargetPublisher:
             )
             return count
 
-        for position, orientation in trajectory.samples:
+        sample_periods_sec = terminal_sample_periods(
+            len(trajectory.samples),
+            period_sec,
+            enabled=terminal_slowdown,
+        )
+        for (position, orientation), sample_period_sec in zip(
+            trajectory.samples,
+            sample_periods_sec,
+        ):
             if not self.client.ok():
                 break
             self._append_trajectory_sample(position, orientation)
             self.client.publish_pose(hand, position, orientation)
             count += 1
-            time.sleep(period_sec)
+            time.sleep(sample_period_sec)
 
         target_final_hold_sec = self.publish_sec
         if final_hold_sec is not None:
@@ -336,6 +346,7 @@ class RequestIkTargetPublisher:
         min_steps: int = 1,
         on_after_waypoint: dict[int, WaypointCallback] | None = None,
         final_hold_sec: float | None = None,
+        terminal_slowdown: bool = False,
     ) -> int:
         if not waypoints:
             return 0
@@ -405,6 +416,7 @@ class RequestIkTargetPublisher:
                     final_orientation=trajectory.raw_waypoints[waypoint_index + 1][1],
                     hold_final=is_last_segment,
                     final_hold_sec=final_hold_sec,
+                    terminal_slowdown=terminal_slowdown and is_last_segment,
                 )
                 current_position, current_orientation = trajectory.raw_waypoints[
                     waypoint_index + 1
@@ -427,6 +439,12 @@ class RequestIkTargetPublisher:
             return total_count
 
         sample_offset = 0
+        sample_periods_sec = terminal_sample_periods(
+            len(trajectory.samples),
+            period_sec,
+            enabled=terminal_slowdown,
+        )
+        global_sample_index = 0
         for waypoint_index, steps in enumerate(trajectory.segment_steps):
             segment_samples = trajectory.samples[sample_offset : sample_offset + steps]
             sample_offset += steps
@@ -437,7 +455,8 @@ class RequestIkTargetPublisher:
                 self._append_trajectory_sample(position, orientation)
                 self.client.publish_pose(hand, position, orientation)
                 total_count += 1
-                time.sleep(period_sec)
+                time.sleep(sample_periods_sec[global_sample_index])
+                global_sample_index += 1
             if not completed_path:
                 break
             current_position, current_orientation = trajectory.raw_waypoints[
@@ -502,20 +521,27 @@ class RequestIkTargetPublisher:
         final_orientation: tuple[float, float, float, float],
         hold_final: bool = True,
         final_hold_sec: float | None = None,
+        terminal_slowdown: bool = False,
     ) -> int:
         if not samples:
             return 0
         period_sec = 1.0 / self.publish_rate_hz
         for position, orientation in samples:
             self._append_trajectory_sample(position, orientation)
+        sample_periods_sec = terminal_sample_periods(
+            len(samples),
+            period_sec,
+            enabled=terminal_slowdown,
+        )
         count = self.client.publish_pose_trajectory(
             hand,
             samples,
             joint_name=self._trajectory_joint_name(hand),
             sample_period_sec=period_sec,
+            sample_periods_sec=sample_periods_sec,
         )
         self._save_joint_trajectory_csv(hand, samples, period_sec)
-        time.sleep(len(samples) * period_sec)
+        time.sleep(sum(sample_periods_sec))
         trajectory_final_hold_sec = self.publish_sec
         if final_hold_sec is not None:
             trajectory_final_hold_sec = max(float(final_hold_sec), 0.0)
@@ -1144,6 +1170,7 @@ def publish_home_request_ik_target(
         orientation,
         args,
         final_hold_sec=final_hold_sec,
+        terminal_slowdown=True,
     )
 
     topic = args.left_target_topic if hand == "left" else args.right_target_topic
@@ -1173,6 +1200,7 @@ def publish_request_ik_target(
     start_position_xyz: np.ndarray | None = None,
     start_orientation_xyzw: tuple[float, float, float, float] | None = None,
     final_hold_sec: float | None = None,
+    terminal_slowdown: bool = False,
 ) -> int:
     if not bool(getattr(args, "target_smooth_trajectory", True)):
         return publisher.publish_target(
@@ -1192,6 +1220,7 @@ def publish_request_ik_target(
         max_step_deg=max_step_deg,
         min_steps=int(getattr(args, "target_trajectory_min_steps", 1)),
         final_hold_sec=final_hold_sec,
+        terminal_slowdown=terminal_slowdown,
     )
 
 
@@ -1205,6 +1234,7 @@ def publish_request_ik_path(
     start_orientation_xyzw: tuple[float, float, float, float] | None = None,
     on_after_waypoint: dict[int, WaypointCallback] | None = None,
     final_hold_sec: float | None = None,
+    terminal_slowdown: bool = False,
 ) -> int:
     if not bool(getattr(args, "target_smooth_trajectory", True)):
         count = 0
@@ -1241,7 +1271,31 @@ def publish_request_ik_path(
         min_steps=int(getattr(args, "target_trajectory_min_steps", 1)),
         on_after_waypoint=on_after_waypoint,
         final_hold_sec=final_hold_sec,
+        terminal_slowdown=terminal_slowdown,
     )
+
+
+def terminal_sample_periods(
+    sample_count: int,
+    base_period_sec: float,
+    *,
+    enabled: bool,
+    tail_count: int = 8,
+    max_scale: float = 3.0,
+) -> list[float]:
+    count = max(int(sample_count), 0)
+    base_period = max(float(base_period_sec), 1e-4)
+    periods = [base_period] * count
+    if not enabled or count <= 1:
+        return periods
+
+    tail = min(max(int(tail_count), 1), count)
+    max_scale = max(float(max_scale), 1.0)
+    for tail_index in range(tail):
+        ratio = float(tail_index + 1) / float(tail)
+        scale = 1.0 + (max_scale - 1.0) * ratio * ratio
+        periods[count - tail + tail_index] = base_period * scale
+    return periods
 
 
 def raw_target_sample_indices(segment_steps: object, sample_count: int) -> np.ndarray:
