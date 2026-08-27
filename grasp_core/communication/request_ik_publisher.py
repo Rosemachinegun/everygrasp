@@ -30,7 +30,12 @@ from grasp_core.motion.trajectory import (
 )
 from grasp_core.core.robot_target_pose import TargetObjectPose
 from grasp_core.config.request_ik_config import (
+    DEFAULT_JOINT_TRAJECTORY_CSV_DIR,
     DEFAULT_TRAJECTORY_PLOT_DIR,
+)
+from grasp_core.communication.joint_trajectory_csv import (
+    make_joint_trajectory_csv_path,
+    write_timestamped_pose_samples_joint_trajectory_csv,
 )
 from grasp_core.core.pose_math import (
     PoseWaypoint,
@@ -68,6 +73,8 @@ class RequestIkTargetPublisher:
         publish_rate_hz: float,
         publish_sec: float,
         record_trajectories: bool,
+        record_joint_trajectory_csv: bool = False,
+        joint_trajectory_csv_dir: str | Path = DEFAULT_JOINT_TRAJECTORY_CSV_DIR,
         command_mode: str = "auto",
         left_trajectory_topic: str | None = None,
         right_trajectory_topic: str | None = None,
@@ -78,6 +85,8 @@ class RequestIkTargetPublisher:
         self.publish_rate_hz = max(float(publish_rate_hz), 0.1)
         self.publish_sec = max(float(publish_sec), 0.0)
         self.record_trajectories = bool(record_trajectories)
+        self.record_joint_trajectory_csv = bool(record_joint_trajectory_csv)
+        self.joint_trajectory_csv_dir = Path(joint_trajectory_csv_dir).expanduser()
         self.left_topic = left_topic
         self.right_topic = right_topic
         self.command_mode = str(command_mode)
@@ -89,6 +98,10 @@ class RequestIkTargetPublisher:
             str, tuple[np.ndarray, tuple[float, float, float, float]]
         ] = {}
         self._last_published_trajectory: PublishedTrajectory | None = None
+        self._joint_trajectory_csv_batch_active = False
+        self._joint_trajectory_csv_rows: list[dict[str, object]] = []
+        self._joint_trajectory_csv_time_s = 0.0
+        self._joint_trajectory_csv_default_hand: str | None = None
 
         self.client = Ros2PoseTargetPublisher(
             left_topic=left_topic,
@@ -100,7 +113,39 @@ class RequestIkTargetPublisher:
         self.node = self.client.node
 
     def close(self) -> None:
+        self.finish_joint_trajectory_csv_recording()
         self.client.close()
+
+    def begin_joint_trajectory_csv_recording(self, hand: str | None = None) -> None:
+        if not self.record_joint_trajectory_csv:
+            return
+        self._joint_trajectory_csv_batch_active = True
+        self._joint_trajectory_csv_rows = []
+        self._joint_trajectory_csv_time_s = 0.0
+        self._joint_trajectory_csv_default_hand = hand
+
+    def finish_joint_trajectory_csv_recording(self) -> Path | None:
+        if not self._joint_trajectory_csv_batch_active:
+            return None
+        self._joint_trajectory_csv_batch_active = False
+        rows = self._joint_trajectory_csv_rows
+        self._joint_trajectory_csv_rows = []
+        self._joint_trajectory_csv_time_s = 0.0
+        if not self.record_joint_trajectory_csv or not rows:
+            return None
+        hand = str(rows[0].get("hand") or self._joint_trajectory_csv_default_hand or "")
+        joint_name = str(rows[0].get("joint_name") or self._trajectory_joint_name(hand))
+        csv_path = make_joint_trajectory_csv_path(
+            self.joint_trajectory_csv_dir,
+            hand=hand,
+            joint_name=joint_name,
+            point_count=len(rows),
+        )
+        saved_path = write_timestamped_pose_samples_joint_trajectory_csv(csv_path, rows)
+        self.node.get_logger().info(
+            f"saved merged joint trajectory CSV: {saved_path} points={len(rows)}"
+        )
+        return saved_path
 
     def publish_target(
         self,
@@ -131,6 +176,11 @@ class RequestIkTargetPublisher:
             self.client.publish_pose(hand, position, orientation)
             count = 1
 
+        self._save_joint_trajectory_csv(
+            hand,
+            [(position, orientation)],
+            period_sec,
+        )
         self.node.get_logger().info(
             f"published {hand} target on {topic}: "
             f"x={position_xyz[0]:.3f}, y={position_xyz[1]:.3f}, z={position_xyz[2]:.3f}, "
@@ -233,6 +283,7 @@ class RequestIkTargetPublisher:
             self.client.publish_pose(hand, end_position, end_orientation)
             count = 1
 
+        self._save_joint_trajectory_csv(hand, trajectory.samples, period_sec)
         self._remember_target(hand, end_position, end_orientation)
         self.node.get_logger().info(
             f"published smooth {hand} target on {topic}: "
@@ -255,12 +306,14 @@ class RequestIkTargetPublisher:
         position = checked_position(position_xyz)
         orientation = normalize_quaternion(orientation_xyzw)
         if self._uses_trajectory_command(hand):
+            samples = [(position, orientation)]
             count = self.client.publish_pose_trajectory(
                 hand,
-                [(position, orientation)],
+                samples,
                 joint_name=self._trajectory_joint_name(hand),
                 sample_period_sec=duration_sec,
             )
+            self._save_joint_trajectory_csv(hand, samples, duration_sec)
             time.sleep(duration_sec)
             return count
         return self.client.hold_pose(
@@ -411,6 +464,7 @@ class RequestIkTargetPublisher:
             self.client.publish_pose(hand, current_position, current_orientation)
             total_count = 1
 
+        self._save_joint_trajectory_csv(hand, trajectory.samples, period_sec)
         self._remember_target(hand, current_position, current_orientation)
         self.node.get_logger().info(
             f"published smooth {hand} pick path on {topic}: "
@@ -460,6 +514,7 @@ class RequestIkTargetPublisher:
             joint_name=self._trajectory_joint_name(hand),
             sample_period_sec=period_sec,
         )
+        self._save_joint_trajectory_csv(hand, samples, period_sec)
         time.sleep(len(samples) * period_sec)
         trajectory_final_hold_sec = self.publish_sec
         if final_hold_sec is not None:
@@ -472,6 +527,50 @@ class RequestIkTargetPublisher:
                 trajectory_final_hold_sec,
             )
         return count
+
+    def _save_joint_trajectory_csv(
+        self,
+        hand: str,
+        samples: list[PoseWaypoint],
+        sample_period_sec: float,
+    ) -> Path | None:
+        if not self.record_joint_trajectory_csv or not samples:
+            return None
+        if not self._joint_trajectory_csv_batch_active:
+            self.begin_joint_trajectory_csv_recording(hand)
+        self._append_joint_trajectory_csv_rows(hand, samples, sample_period_sec)
+        return None
+
+    def _append_joint_trajectory_csv_rows(
+        self,
+        hand: str,
+        samples: list[PoseWaypoint],
+        sample_period_sec: float,
+    ) -> None:
+        joint_name = self._trajectory_joint_name(hand)
+        source_topic = self.client.trajectory_topic_for_hand(hand) or ""
+        period_sec = max(float(sample_period_sec), 1e-4)
+        for position_xyz, orientation_xyzw in samples:
+            self._joint_trajectory_csv_time_s += period_sec
+            position = checked_position(position_xyz)
+            qx, qy, qz, qw = normalize_quaternion(orientation_xyzw)
+            self._joint_trajectory_csv_rows.append(
+                {
+                    "frame_index": len(self._joint_trajectory_csv_rows),
+                    "time_from_start_s": f"{self._joint_trajectory_csv_time_s:.9f}",
+                    "hand": hand,
+                    "joint_name": joint_name,
+                    "frame_id": self.frame_id,
+                    "source_topic": source_topic,
+                    "x_m": f"{float(position[0]):.9f}",
+                    "y_m": f"{float(position[1]):.9f}",
+                    "z_m": f"{float(position[2]):.9f}",
+                    "qx": f"{qx:.9f}",
+                    "qy": f"{qy:.9f}",
+                    "qz": f"{qz:.9f}",
+                    "qw": f"{qw:.9f}",
+                }
+            )
 
     def _remember_target(
         self,
@@ -541,6 +640,8 @@ def build_ik_target_publisher(
             publish_rate_hz=args.target_publish_rate_hz,
             publish_sec=args.target_publish_sec,
             record_trajectories=should_visualize_grasp_path(args),
+            record_joint_trajectory_csv=should_save_joint_trajectory_csv(args),
+            joint_trajectory_csv_dir=args.joint_trajectory_csv_dir,
             command_mode=args.target_command_mode,
             left_trajectory_topic=args.left_trajectory_topic,
             right_trajectory_topic=args.right_trajectory_topic,
@@ -563,7 +664,7 @@ def build_ik_target_publisher(
         f"{args.target_trajectory_angular_speed_dps:.1f}deg/s, "
         f"min_steps={int(args.target_trajectory_min_steps)}, "
         f"visualize_grasp_path={should_visualize_grasp_path(args)}, "
-
+        f"save_joint_trajectory_csv={should_save_joint_trajectory_csv(args)}, "
         f"hold={args.target_publish_sec:.2f}s@{args.target_publish_rate_hz:.1f}Hz",
         flush=True,
     )
@@ -660,6 +761,10 @@ def should_save_request_ik_trajectory_plot(args: argparse.Namespace) -> bool:
     """Backward-compatible wrapper; use should_visualize_grasp_path()."""
 
     return should_visualize_grasp_path(args)
+
+
+def should_save_joint_trajectory_csv(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "save_joint_trajectory_csv", False))
 
 
 def prepare_request_ik_trajectory_plot_data(

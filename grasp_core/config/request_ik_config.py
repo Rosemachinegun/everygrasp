@@ -146,6 +146,9 @@ DEFAULT_TARGET_TRAJECTORY_ANGULAR_SPEED_DPS = (
     TARGET_TRAJECTORY_DEFAULTS.angular_speed_dps
 )
 DEFAULT_TRAJECTORY_PLOT_DIR = TARGET_TRAJECTORY_DEFAULTS.plot_dir
+DEFAULT_JOINT_TRAJECTORY_CSV_DIR = (
+    PROJECT_ROOT / "captures" / "request_ik_joint_trajectories"
+)
 
 
 @dataclass(frozen=True)
@@ -166,6 +169,7 @@ class GraspConfig:
     ik_downward_tilt_y_deg: float = 0.0
     ik_downward_tilt_frame: str = "local"
     visualize_grasp_path: bool = True
+    save_joint_trajectory_csv: bool = False
 
 
 DEFAULT_GRASP_CONFIG = GraspConfig()
@@ -357,6 +361,14 @@ def tool_grasp_defaults_from_yaml(path: Path) -> GraspConfig:
             fallback=cfg.visualize_grasp_path,
             name="visualize_grasp_path",
         ),
+        save_joint_trajectory_csv=parse_config_bool(
+            defaults.get(
+                "save_joint_trajectory_csv",
+                cfg.save_joint_trajectory_csv,
+            ),
+            fallback=cfg.save_joint_trajectory_csv,
+            name="save_joint_trajectory_csv",
+        ),
     )
 
 
@@ -381,7 +393,8 @@ def apply_grasp_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
         f"{args.ik_downward_tilt_axis}+y={float(args.ik_downward_tilt_y_deg):.2f}deg/"
         f"{args.ik_downward_tilt_frame} "
         f"side_approach_policy=disabled "
-        f"visualize_grasp_path={bool(args.visualize_grasp_path)}",
+        f"visualize_grasp_path={bool(args.visualize_grasp_path)} "
+        f"save_joint_trajectory_csv={bool(args.save_joint_trajectory_csv)}",
         flush=True,
     )
     return normalize_gripper_args(args)
@@ -630,6 +643,11 @@ def parse_args() -> argparse.Namespace:
         help="Directory where grasp path visualization PNG files are saved.",
     )
     parser.add_argument(
+        "--joint-trajectory-csv-dir",
+        default=str(DEFAULT_JOINT_TRAJECTORY_CSV_DIR),
+        help="Directory where timestamped joint trajectory CSV files are saved.",
+    )
+    parser.add_argument(
         "--target-trajectory-plot",
         type=parse_bool,
         default=None,
@@ -647,6 +665,16 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Override tool.yaml defaults.visualize_grasp_path. TRUE saves a grasp "
             "path PNG after publishing; FALSE skips visualization."
+        ),
+    )
+    parser.add_argument(
+        "--save-joint-trajectory-csv",
+        type=parse_optional_bool,
+        default=None,
+        metavar="TRUE/FALSE",
+        help=(
+            "Override tool.yaml defaults.save_joint_trajectory_csv. TRUE saves "
+            "one timestamped joint trajectory CSV row per trajectory frame."
         ),
     )
     parser.add_argument(

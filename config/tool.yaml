@@ -14,7 +14,8 @@ defaults:
   ik_downward_tilt_axis: z
   ik_downward_tilt_y_deg: 45.0
   ik_downward_tilt_frame: local
-  visualize_grasp_path:   True
+  visualize_grasp_path:   False
+  save_joint_trajectory_csv: True
 
 templates:
   saw:

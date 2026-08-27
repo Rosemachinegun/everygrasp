@@ -79,6 +79,7 @@ def publish_latest_request_ik_target(
     grip_result: dict[str, Any] = {"confirmed": False, "hand": None, "status": ""}
     start_position = home_position_for_hand(hand, args)
     start_orientation = ik_wrist_orientation_quat(args)
+    publisher.begin_joint_trajectory_csv_recording(hand)
 
     relative_pick_waypoints = pick_template_for_target(target, hand, pick_templates)
     print(
@@ -180,10 +181,12 @@ def publish_latest_request_ik_target(
             used_pick_template = True
             gripper_pose = pose_from_position_quaternion(position, orientation)
         except GripFailedMinLimit as exc:
+            publisher.finish_joint_trajectory_csv_recording()
             status = f"GRIP_FAILED_MIN_LIMIT hand={hand}: {exc}"
             print(f"[tool_template] {status}", flush=True)
             return status
         except GripCommandFailed as exc:
+            publisher.finish_joint_trajectory_csv_recording()
             status = f"GRIP_COMMAND_FAILED hand={hand}: {exc}"
             print(f"[tool_template] {status}", flush=True)
             return status
@@ -227,10 +230,12 @@ def publish_latest_request_ik_target(
                 ),
             )
         except GripFailedMinLimit as exc:
+            publisher.finish_joint_trajectory_csv_recording()
             status = f"GRIP_FAILED_MIN_LIMIT hand={hand}: {exc}"
             print(f"[computed_grasp] {status}", flush=True)
             return status
         except GripCommandFailed as exc:
+            publisher.finish_joint_trajectory_csv_recording()
             status = f"GRIP_COMMAND_FAILED hand={hand}: {exc}"
             print(f"[computed_grasp] {status}", flush=True)
             return status
@@ -268,6 +273,9 @@ def publish_latest_request_ik_target(
         status += f" | grasp_path_csv={artifacts.csv_path}"
         if artifacts.plot_path is not None:
             status += f" | grasp_path_plot={artifacts.plot_path}"
+    joint_csv_path = publisher.finish_joint_trajectory_csv_recording()
+    if joint_csv_path is not None:
+        status += f" | joint_trajectory_csv={joint_csv_path}"
     return status
 
 
