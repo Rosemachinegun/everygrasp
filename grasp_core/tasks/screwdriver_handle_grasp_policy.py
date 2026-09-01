@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Side-aware grasp policy for screwdriver-handle style long objects.
+"""Screwdriver-handle grasp policy for long objects.
 
 Coordinate conventions
 ----------------------
@@ -11,15 +11,15 @@ Grasp-policy frame:
     local Z = world +Z
     local X = Y x Z
 
-The sign of policy +Y is selected according to the active arm:
-    left  -> +Y tends toward base/world +Y
-    right -> +Y tends toward base/world -Y
+The sign of policy +Y is object-centric and follows FlowPose's raw long-axis
+sign.  The active arm is used only to select an equivalent wrist yaw / IK
+orientation; it must not change the position-offset direction.
 
 The resulting policy frame is always right-handed:
     X x Y = Z
 
 Gripper TCP convention:
-    local X = gripper closing axis
+    local Y = gripper closing axis
     local Z = gripper approach axis
 """
 
@@ -54,16 +54,8 @@ LONG_OBJECT_KEYWORDS = (
 )
 HAND_SIDE_EPS = 1e-8
 
-# Prevent ±180° orientation switching when the long axis is almost parallel
-# to world X and therefore has almost no left/right Y component.
-LONG_AXIS_SIDE_EPS = 0.05
-
 WORLD_X_AXIS = np.asarray(
     [1.0, 0.0, 0.0],
-    dtype=np.float64,
-)
-WORLD_Y_AXIS = np.asarray(
-    [0.0, 1.0, 0.0],
     dtype=np.float64,
 )
 WORLD_Z_AXIS = np.asarray(
@@ -73,15 +65,17 @@ WORLD_Z_AXIS = np.asarray(
 
 # request_ik TCP convention:
 #
-# local X = closing axis
+# local Y = closing axis
 # local Z = approach axis
-GRIPPER_CLOSING_AXIS_INDEX = 0
+GRIPPER_CLOSING_AXIS_INDEX = 1
 GRIPPER_APPROACH_AXIS_INDEX = 2
 
 # FlowPose screwdriver convention:
 #
-# local X = physical long axis
+# Raw local X is the screwdriver long-axis reference.  The rebuilt z-up policy
+# frame stores that long axis in local Y.
 FLOWPOSE_LONG_AXIS_INDEX = 0
+POLICY_LONG_AXIS_INDEX = 1
 
 
 @dataclass(frozen=True)
@@ -100,11 +94,13 @@ class ScrewdriverHandleGraspPolicyResult:
     # +1 left, -1 right
     side_sign: float
 
-    # Policy X axis, used as desired gripper closing direction.
+    # Policy X axis, used as desired physical gripper closing direction.
     side_axis: np.ndarray
 
     # Policy Y axis, physical screwdriver long axis.
     long_axis: np.ndarray
+
+    long_axis_index: int
 
     yaw_deg: float
     tilt_y_deg: float
@@ -119,6 +115,7 @@ def is_screwdriver_handle_object(object_type: str) -> bool:
         keyword in normalized_type
         for keyword in LONG_OBJECT_KEYWORDS
     )
+
 
 def make_screwdriver_handle_gripper_pose(
     target: TargetObjectPose,
@@ -140,7 +137,6 @@ def make_screwdriver_handle_gripper_pose(
 
     object_pose = screwdriver_handle_z_up_object_pose(
         target.base_pose,
-        hand=hand,
     )
 
     fallback_reason = validate_pose_matrix(object_pose)
@@ -187,6 +183,7 @@ def make_screwdriver_handle_gripper_pose(
             side_sign=side_sign,
             side_axis=side_axis,
             long_axis=long_axis,
+            long_axis_index=POLICY_LONG_AXIS_INDEX,
             yaw_deg=yaw_deg,
             tilt_y_deg=tilt_y_deg,
         ),
@@ -226,7 +223,6 @@ def build_screwdriver_handle_pick_waypoints(
 
     object_pose = screwdriver_handle_z_up_object_pose(
         target.base_pose,
-        hand=hand,
     )
 
     fallback_reason = validate_pose_matrix(object_pose)
@@ -319,80 +315,85 @@ def screwdriver_handle_pose_waypoints(
 
 def screwdriver_handle_z_up_object_pose(
     object_pose: np.ndarray,
+    size: np.ndarray | None = None,
     *,
-    hand: str,
+    hand: str | None = None,
 ) -> np.ndarray:
-    """Build a Z-up right-handed frame while preserving FlowPose X as long axis.
+    """Build a Z-up right-handed frame with policy Y as the long axis.
 
     Convention:
-        X = physical long axis
+        Y = physical long axis
         Z = world +Z
-        Y = Z x X
+        X = Y x Z
 
-    X may be flipped by 180 degrees so that:
-        left  -> +X tends toward world +Y
-        right -> +X tends toward world -Y
+    The long-axis sign is intentionally preserved from FlowPose's raw local X.
+    This keeps relative waypoint Y offsets object-centric: a configured -Y
+    offset always reaches the same physical end of the object regardless of
+    object placement or selected arm.
 
     The frame always remains right-handed.
     """
 
     pose = np.asarray(object_pose, dtype=np.float64).copy()
 
-    side_sign = side_sign_for_hand(hand)
-    if side_sign == 0.0:
+    if hand is not None and side_sign_for_hand(hand) == 0.0:
         raise ValueError(f"unsupported hand: {hand!r}")
 
-    # FlowPose local X is the physical long axis.
-    x_axis = horizontal_unit_vector(
+    del size
+
+    long_axis = horizontal_unit_vector(
         pose[:3, FLOWPOSE_LONG_AXIS_INDEX]
     )
-    if x_axis is None:
+    if long_axis is None:
         raise ValueError(
             "screwdriver long axis has no valid horizontal component"
         )
-
-    # Choose +X / -X according to active arm side.
-    if abs(float(x_axis[1])) >= LONG_AXIS_SIDE_EPS:
-        if float(x_axis[1]) * side_sign < 0.0:
-            x_axis = -x_axis
 
     z_axis = WORLD_Z_AXIS.copy()
 
     # Right-handed frame:
     #
     # X × Y = Z
-    # therefore Y = Z × X
-    y_axis = normalized(
-        np.cross(z_axis, x_axis)
-    )
-
-    # Re-orthogonalize X.
-    x_axis = normalized(
-        np.cross(y_axis, z_axis)
-    )
+    # therefore X = Y × Z.
+    lateral_axis = normalized(np.cross(long_axis, z_axis))
+    long_axis = normalized(np.cross(z_axis, lateral_axis))
 
     pose[:3, :3] = np.column_stack(
         (
-            x_axis,
-            y_axis,
+            lateral_axis,
+            long_axis,
             z_axis,
         )
     )
 
     return pose
 
+
+def screwdriver_handle_long_axis_index(
+    size: np.ndarray | None,
+) -> int:
+    """Return the long-axis index in the reconstructed z-up policy frame.
+
+    Kept for callers/tests that need an index, but it is deliberately not a
+    FlowPose source-axis index.
+    """
+
+    del size
+    return POLICY_LONG_AXIS_INDEX
+
+
 def screwdriver_handle_long_axis(
     object_pose: np.ndarray,
+    size: np.ndarray | None = None,
     *,
-    hand: str,
+    hand: str | None = None,
 ) -> np.ndarray:
     """Return signed horizontal physical long axis.
 
-    FlowPose local X is treated as the screwdriver physical long axis.
+    The returned axis is local Y after rebuilding the screwdriver z-up frame.
 
-    The returned direction follows the grasp-policy convention:
-        left  -> +Y side
-        right -> -Y side
+    The returned direction is object-centric and does not depend on the active
+    hand.  ``hand`` is accepted for backward-compatible validation only.
     """
 
     pose = np.asarray(
@@ -407,18 +408,18 @@ def screwdriver_handle_long_axis(
 
     side_sign = side_sign_for_hand(hand)
 
-    if side_sign == 0.0:
+    if hand is not None and side_sign == 0.0:
         raise ValueError(
             f"unsupported hand: {hand!r}"
         )
 
-    raw_axis = pose[
-        :3,
-        FLOWPOSE_LONG_AXIS_INDEX,
-    ]
+    z_up_pose = screwdriver_handle_z_up_object_pose(
+        pose,
+        size,
+    )
 
     long_axis = horizontal_unit_vector(
-        raw_axis,
+        z_up_pose[:3, POLICY_LONG_AXIS_INDEX],
     )
 
     if long_axis is None:
@@ -427,49 +428,7 @@ def screwdriver_handle_long_axis(
             "horizontal component"
         )
 
-    return choose_long_axis_sign_for_hand(
-        long_axis,
-        side_sign,
-    )
-
-
-def choose_long_axis_sign_for_hand(
-    long_axis: np.ndarray,
-    side_sign: float,
-) -> np.ndarray:
-    """Choose ±long_axis so +Y points toward the active arm side.
-
-    left:
-        desired world-Y sign > 0
-
-    right:
-        desired world-Y sign < 0
-
-    A deadband is used when the long axis is nearly parallel to world X.
-    In that region, the original FlowPose sign is retained to avoid
-    unstable 180-degree flips caused by tiny Y-axis noise.
-    """
-
-    axis = normalized(
-        np.asarray(
-            long_axis,
-            dtype=np.float64,
-        )
-    )
-
-    y_component = float(axis[1])
-
-    # If the screwdriver is almost parallel to world X, neither ±axis
-    # clearly belongs to the left or right side.
-    #
-    # Keep FlowPose's original sign instead of flipping according to noise.
-    if abs(y_component) < LONG_AXIS_SIDE_EPS:
-        return axis.copy()
-
-    if y_component * side_sign < 0.0:
-        return -axis
-
-    return axis.copy()
+    return long_axis.copy()
 
 
 def screwdriver_handle_lateral_axis(
@@ -503,7 +462,7 @@ def screwdriver_handle_wrist_orientation(
 ) -> tuple[np.ndarray, float, float]:
     """Construct screwdriver wrist orientation.
 
-    The gripper local X axis is aligned with the policy lateral direction,
+    The gripper closing axis is aligned with the policy lateral direction,
     while the shared Y-axis downward tilt is preserved.
     """
 
@@ -566,9 +525,10 @@ def screwdriver_handle_yaw_deg(
     *,
     reference_yaw_deg: float = 0.0,
 ) -> float:
-    """Compute yaw that aligns gripper local X with the lateral axis.
+    """Compute yaw that aligns the gripper closing axis with the lateral axis.
 
-    Because local X is the gripper closing axis, this chooses a closing
+    Because the gripper closing axis must be perpendicular to the screwdriver
+    long axis, this chooses a closing
     direction perpendicular to the screwdriver long axis.
 
     Two orientations separated by 180 degrees describe the same parallel
@@ -599,10 +559,9 @@ def screwdriver_handle_yaw_deg(
             WORLD_X_AXIS.copy()
         )
 
-    # local X should point toward desired_horizontal.
-    yaw_rad = np.arctan2(
-        desired_horizontal[1],
-        desired_horizontal[0],
+    yaw_rad = yaw_rad_for_horizontal_axis_alignment(
+        desired_horizontal,
+        GRIPPER_CLOSING_AXIS_INDEX,
     )
 
     yaw_deg = float(
@@ -614,6 +573,32 @@ def screwdriver_handle_yaw_deg(
     return closest_parallel_axis_yaw_deg(
         yaw_deg,
         reference_yaw_deg,
+    )
+
+
+def yaw_rad_for_horizontal_axis_alignment(
+    desired_horizontal: np.ndarray,
+    local_axis_index: int,
+) -> float:
+    """Return yaw that points the selected local XY axis at desired_horizontal."""
+
+    desired = normalized(
+        np.asarray(
+            desired_horizontal,
+            dtype=np.float64,
+        )
+    )
+
+    if local_axis_index == 1:
+        # Rz(yaw) local Y = [-sin(yaw), cos(yaw), 0].
+        return float(np.arctan2(-desired[0], desired[1]))
+
+    if local_axis_index == 0:
+        # Rz(yaw) local X = [cos(yaw), sin(yaw), 0].
+        return float(np.arctan2(desired[1], desired[0]))
+
+    raise ValueError(
+        f"unsupported horizontal local axis index: {local_axis_index}"
     )
 
 
@@ -671,7 +656,7 @@ def angular_distance_deg(
 def closing_axis_from_orientation(
     rotation: np.ndarray,
 ) -> np.ndarray:
-    """Return gripper local X expressed in base frame."""
+    """Return gripper closing axis expressed in base frame."""
 
     return np.asarray(
         rotation,

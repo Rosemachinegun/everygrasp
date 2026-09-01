@@ -57,6 +57,7 @@ from grasp_core.core.pose_math import select_ik_hand  # noqa: E402
 from grasp_core.tasks.robot_actions import (  # noqa: E402
     RobotActionService,
     grip_confirmed,
+    grip_failed_min_limit,
     grip_success_hand,
 )
 from grasp_core.planning.tool_pick_templates import load_tool_pick_templates  # noqa: E402
@@ -244,8 +245,28 @@ class GraspDemoApp:
         self.state.status = status
         command = self.gripper_future_command
         hand = self.gripper_future_hand
-        if command == "grip" and grip_confirmed(status):
-            if hand in {"left", "right"}:
+        if command == "grip":
+            if grip_failed_min_limit(status):
+                failed_hand = (
+                    hand
+                    if hand in {"left", "right"}
+                    else grip_success_hand(status) or self.state.last_gripper_hand
+                )
+                self.state.grasp_confirmed = False
+                self.state.grasp_confirmed_hand = None
+                self.state.grasp_confirmed_label = None
+                if failed_hand in {"left", "right"}:
+                    self.state.last_gripper_hand = failed_hand
+                self.gripper_future = None
+                self.gripper_future_command = None
+                self.gripper_future_hand = None
+                self.start_grip_failure_recovery(
+                    status,
+                    failed_hand=failed_hand if failed_hand in {"left", "right"} else None,
+                )
+                return
+
+            if grip_confirmed(status) and hand in {"left", "right"}:
                 self.state.grasp_confirmed = True
                 self.state.grasp_confirmed_hand = (
                     grip_success_hand(status) or self.state.last_gripper_hand

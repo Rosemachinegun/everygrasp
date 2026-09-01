@@ -64,10 +64,10 @@ def load_camera_extrinsic_from_xacro(
 
 
 def load_target_objects_from_flowpose_json(
-    flowpose_json: Path,
+    flowpose_json: str | Path,
     base_to_camera: np.ndarray,
 ) -> list[TargetObjectPose]:
-    payload = json.loads(flowpose_json.read_text(encoding="utf-8"))
+    payload = json.loads(Path(flowpose_json).read_text(encoding="utf-8"))
     objects = payload.get("objects") or []
     if objects:
         labels = [str(obj.get("name") or f"object_{index + 1}") for index, obj in enumerate(objects)]

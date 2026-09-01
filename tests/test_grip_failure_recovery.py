@@ -58,6 +58,33 @@ def test_left_grip_failure_returns_home_even_when_retry_loop_disabled() -> None:
     assert "retry loop disabled" in app.state.status
 
 
+def test_manual_right_grip_failure_returns_home() -> None:
+    app = GraspDemoApp.__new__(GraspDemoApp)
+    app.args = Namespace(
+        ik_hand="auto",
+        grip_retry_loop=False,
+        grip_retry_max_attempts=3,
+    )
+    app.state = app_state()
+    app.robot_actions = FakeRobotActions()
+    app.action_executor = ImmediateExecutor()
+    app.gripper_future = Future()
+    app.gripper_future.set_result(
+        "Sent right gripper grip to 127.0.0.1:55661: "
+        "OK GRASP_FAILED_MIN_LIMIT grip done exit_code=2"
+    )
+    app.gripper_future_command = "grip"
+    app.gripper_future_hand = "right"
+
+    app._collect_gripper_result()
+
+    assert app.state.retry_stage is RetryStage.RECOVERY
+    assert app.state.grasp_confirmed is False
+    assert app.state.last_gripper_hand == "right"
+    assert app.robot_actions.calls == [("home", "right"), ("release", "right")]
+    assert "returning right home" in app.state.status
+
+
 def app_state():
     from grasp_core.apps.flowpose_request_ik_app import RuntimeState
 

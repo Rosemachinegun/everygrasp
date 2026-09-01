@@ -18,7 +18,7 @@ from grasp_core.tasks.screwdriver_handle_grasp_policy import (
 
 
 def test_screwdriver_handle_keeps_y_tilt_and_closing_axis_is_lateral_left() -> None:
-    target = make_screwdriver_target(object_y=np.array([1.0, 1.0, 0.4]))
+    target = make_screwdriver_target(long_axis=np.array([1.0, 1.0, 0.4]))
 
     result = make_screwdriver_handle_gripper_pose(
         target,
@@ -37,7 +37,7 @@ def test_screwdriver_handle_keeps_y_tilt_and_closing_axis_is_lateral_left() -> N
 
 
 def test_screwdriver_handle_pose_selects_right_halfspace_side() -> None:
-    target = make_screwdriver_target(object_y=np.array([1.0, 1.0, 0.0]))
+    target = make_screwdriver_target(long_axis=np.array([1.0, 1.0, 0.0]))
 
     result = make_screwdriver_handle_gripper_pose(
         target,
@@ -55,7 +55,7 @@ def test_screwdriver_handle_pose_selects_right_halfspace_side() -> None:
 
 
 def test_screwdriver_handle_right_hand_avoids_equivalent_180deg_wrist_flip() -> None:
-    target = make_screwdriver_target(object_y=np.array([1.0, 0.0, 0.0]))
+    target = make_screwdriver_target(long_axis=np.array([1.0, 0.0, 0.0]))
 
     result = make_screwdriver_handle_gripper_pose(
         target,
@@ -72,8 +72,8 @@ def test_screwdriver_handle_right_hand_avoids_equivalent_180deg_wrist_flip() -> 
     assert abs(metadata.yaw_deg) <= 90.0
 
 
-def test_screwdriver_handle_right_hand_tie_breaks_to_smaller_yaw() -> None:
-    target = make_screwdriver_target(object_y=np.array([-1.0, 1.0, 0.0]))
+def test_screwdriver_handle_right_hand_aligns_local_y_closing_axis() -> None:
+    target = make_screwdriver_target(long_axis=np.array([-1.0, 1.0, 0.0]))
 
     result = make_screwdriver_handle_gripper_pose(
         target,
@@ -86,12 +86,14 @@ def test_screwdriver_handle_right_hand_tie_breaks_to_smaller_yaw() -> None:
     )
 
     assert result is not None
-    _gripper_pose, metadata = result
-    assert metadata.yaw_deg == 45.0
+    gripper_pose, metadata = result
+    closing_axis = closing_axis_from_orientation(gripper_pose[:3, :3])
+    assert abs(float(closing_axis @ metadata.long_axis)) < 1e-8
+    assert abs(float(abs(closing_axis @ metadata.side_axis) - 1.0)) < 1e-8
 
 
 def test_screwdriver_handle_template_waypoints_keep_y_tilt_ignore_yaml_quaternion() -> None:
-    target = make_screwdriver_target(object_y=np.array([1.0, 0.0, 0.0]))
+    target = make_screwdriver_target(long_axis=np.array([1.0, 0.0, 0.0]))
     relative_waypoints = [
         (
             np.array([0.0, 0.0, 0.2]),
@@ -125,8 +127,49 @@ def test_screwdriver_handle_template_waypoints_keep_y_tilt_ignore_yaml_quaternio
         assert position[2] > target.base_pose[2, 3]
 
 
+def test_screwdriver_handle_waypoint_y_offset_is_hand_independent() -> None:
+    target = make_screwdriver_target(long_axis=np.array([0.2, 1.0, 0.0]))
+    relative_waypoints = [
+        (
+            np.array([0.0, -0.05, 0.03]),
+            (0.0, 0.0, 0.0, 1.0),
+            1.0,
+        ),
+    ]
+
+    left_waypoints = build_screwdriver_handle_pick_waypoints(
+        target,
+        relative_waypoints,
+        args(ik_downward_tilt_left_deg=-45.0),
+        hand="left",
+    )
+    right_waypoints = build_screwdriver_handle_pick_waypoints(
+        target,
+        relative_waypoints,
+        args(ik_downward_tilt_right_deg=45.0),
+        hand="right",
+    )
+
+    assert left_waypoints is not None
+    assert right_waypoints is not None
+    np.testing.assert_allclose(
+        left_waypoints[0][0],
+        right_waypoints[0][0],
+    )
+
+    object_pose = screwdriver_handle_z_up_object_pose(target.base_pose, target.size)
+    expected_position = (
+        object_pose
+        @ np.array([0.0, -0.05, 0.03, 1.0], dtype=np.float64)
+    )[:3]
+    np.testing.assert_allclose(
+        left_waypoints[0][0],
+        expected_position,
+    )
+
+
 def test_screwdriver_handle_integrates_with_global_y_tilt_but_custom_z_yaw() -> None:
-    target = make_screwdriver_target(object_y=np.array([1.0, 0.0, 0.0]))
+    target = make_screwdriver_target(long_axis=np.array([1.0, 0.0, 0.0]))
 
     gripper_pose, _template, fallback_reason = make_gripper_target_pose(
         target,
@@ -155,7 +198,7 @@ def test_screwdriver_handle_integrates_with_global_y_tilt_but_custom_z_yaw() -> 
     )
 
 
-def test_screwdriver_handle_uses_size_longest_local_axis_from_pose() -> None:
+def test_screwdriver_handle_uses_z_up_local_y_as_long_axis() -> None:
     pose = np.array(
         [
             [0.9838460166918025, -0.1788843948818775, 0.006883945628626315, 0.1006392166018486],
@@ -167,12 +210,11 @@ def test_screwdriver_handle_uses_size_longest_local_axis_from_pose() -> None:
     )
     size = np.array([0.0444459393620491, 0.020002959296107292, 0.10555826872587204])
 
-    assert screwdriver_handle_long_axis_index(size) == 2
+    assert screwdriver_handle_long_axis_index(size) == 1
     long_axis = screwdriver_handle_long_axis(pose, size)
 
-    expected = pose[:3, 2].copy()
-    expected[2] = 0.0
-    expected = expected / np.linalg.norm(expected)
+    z_up_pose = screwdriver_handle_z_up_object_pose(pose, size)
+    expected = z_up_pose[:3, 1]
     np.testing.assert_allclose(long_axis, expected)
 
 
@@ -208,8 +250,67 @@ def test_screwdriver_handle_real_capture_closing_x_is_not_long_axis() -> None:
     assert result is not None
     gripper_pose, metadata = result
     closing_axis = closing_axis_from_orientation(gripper_pose[:3, :3])
-    assert metadata.long_axis_index == 2
+    assert metadata.long_axis_index == 1
     assert abs(float(closing_axis @ metadata.long_axis)) < 1e-8
+
+
+def test_screwdriver_handle_captures_close_perpendicular_to_flowpose_x_long_axis() -> None:
+    capture_poses = (
+        np.array(
+            [
+                [0.1452111005783081, -0.9891809821128845, -0.020848996937274933, 0.20597906410694122],
+                [-0.8634114265441895, -0.11640176177024841, -0.4908883273601532, -0.14546464383602142],
+                [0.48315054178237915, 0.08928371220827103, -0.8709729909896851, 0.6647924780845642],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        ),
+        np.array(
+            [
+                [-0.40771448612213135, -0.9130849242210388, -0.006684210151433945, 0.17271284759044647],
+                [-0.8099409937858582, 0.36501896381378174, -0.4590824544429779, -0.027604399248957634],
+                [0.421621173620224, -0.1817607879638672, -0.888368546962738, 0.6149181723594666],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        ),
+    )
+
+    for index, pose in enumerate(capture_poses):
+        target = TargetObjectPose(
+            label="yellow_screwdriver_handle",
+            frame_id=f"yellow_screwdriver_handle_{index}",
+            camera_pose=pose,
+            base_pose=pose,
+            size=np.array([0.03, 0.02, 0.10], dtype=np.float64),
+        )
+
+        result = make_screwdriver_handle_gripper_pose(
+            target,
+            args(
+                ik_downward_tilt_right_deg=45.0,
+                ik_downward_tilt_y_right_deg=45.0,
+                ik_downward_tilt_axis="z",
+            ),
+            hand="right",
+        )
+
+        assert result is not None
+        gripper_pose, metadata = result
+        assert metadata.long_axis_index == 1
+        raw_x_long_axis = pose[:3, 0].copy()
+        raw_x_long_axis[2] = 0.0
+        raw_x_long_axis /= np.linalg.norm(raw_x_long_axis)
+        np.testing.assert_allclose(
+            np.abs(metadata.long_axis),
+            np.abs(raw_x_long_axis),
+        )
+        closing_axis = closing_axis_from_orientation(gripper_pose[:3, :3])
+        assert (
+            abs(float(closing_axis @ metadata.object_pose[:3, 1]))
+            < 1e-8
+        )
+        assert abs(float(abs(closing_axis @ metadata.object_pose[:3, 0]) - 1.0)) < 1e-8
 
 
 def test_generic_template_path_is_unchanged() -> None:
@@ -254,11 +355,11 @@ def args(**overrides) -> Namespace:
     return Namespace(**values)
 
 
-def make_screwdriver_target(object_y: np.ndarray) -> TargetObjectPose:
+def make_screwdriver_target(long_axis: np.ndarray) -> TargetObjectPose:
     pose = np.eye(4)
-    y_axis = object_y / np.linalg.norm(object_y)
-    x_axis = np.cross(y_axis, [0.0, 0.0, 1.0])
-    x_axis = x_axis / np.linalg.norm(x_axis)
+    x_axis = long_axis / np.linalg.norm(long_axis)
+    y_axis = np.cross([0.0, 0.0, 1.0], x_axis)
+    y_axis = y_axis / np.linalg.norm(y_axis)
     z_axis = np.cross(x_axis, y_axis)
     pose[:3, :3] = np.column_stack((x_axis, y_axis, z_axis))
     pose[:3, 3] = [0.2, 0.1, 0.8]

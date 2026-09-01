@@ -705,7 +705,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--prompts", default="red_screwdriver_handle,yellow_screwdriver_handle")
+    parser.add_argument("--prompts", default="toy,yellow_screwdriver_handle")
     parser.add_argument("--sam3-checkpoint-path", default="/model/sam3.pt")
     parser.add_argument("--sam3-root", default=None)
     parser.add_argument(
