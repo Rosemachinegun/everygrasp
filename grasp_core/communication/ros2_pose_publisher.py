@@ -135,23 +135,19 @@ class Ros2PoseTargetPublisher:
         msg.header.frame_id = self.frame_id
         msg.joint_names = [str(joint_name)]
 
-        previous_position: np.ndarray | None = None
+        positions = [
+            checked_position(position_xyz).copy() for position_xyz, _ in samples
+        ]
+        velocities = trajectory_linear_velocities(positions, periods_sec)
         elapsed_sec = 0.0
         for index, (position_xyz, orientation_xyzw) in enumerate(samples):
             point = self.MultiDOFJointTrajectoryPoint()
-            position = checked_position(position_xyz)
             point_period_sec = periods_sec[index]
             elapsed_sec += point_period_sec
             point.transforms = [self.make_transform(position_xyz, orientation_xyzw)]
-            linear_velocity = (
-                np.zeros(3, dtype=np.float64)
-                if previous_position is None
-                else (position - previous_position) / point_period_sec
-            )
-            point.velocities = [self.make_linear_twist(linear_velocity)]
+            point.velocities = [self.make_linear_twist(velocities[index])]
             point.time_from_start = self.duration_from_seconds(elapsed_sec)
             msg.points.append(point)
-            previous_position = position.copy()
 
         publisher.publish(msg)
         return len(msg.points)
@@ -233,3 +229,31 @@ class Ros2PoseTargetPublisher:
         duration.sec = sec
         duration.nanosec = nanosec
         return duration
+
+
+def trajectory_linear_velocities(
+    positions: list[np.ndarray],
+    periods_sec: list[float],
+) -> list[np.ndarray]:
+    """Estimate waypoint velocities with zero start/end velocity boundaries."""
+
+    if not positions:
+        return []
+    if len(positions) == 1:
+        return [np.zeros(3, dtype=np.float64)]
+
+    velocities: list[np.ndarray] = []
+    for index in range(len(positions)):
+        if index == 0 or index == len(positions) - 1:
+            velocities.append(np.zeros(3, dtype=np.float64))
+            continue
+
+        previous_position = checked_position(positions[index - 1])
+        next_position = checked_position(positions[index + 1])
+        previous_dt = max(float(periods_sec[index]), 1e-4)
+        next_dt = max(float(periods_sec[index + 1]), 1e-4)
+        velocities.append(
+            (next_position - previous_position) / (previous_dt + next_dt)
+        )
+
+    return velocities

@@ -18,13 +18,26 @@ from grasp_core.core.pose_math import (
     validate_pose_matrix,
 )
 from grasp_core.core.robot_target_pose import TargetObjectPose
+from grasp_core.tasks.screwdriver_handle_grasp_policy import (
+    make_screwdriver_handle_gripper_pose,
+)
 
 
 def make_gripper_target_pose(
     target: TargetObjectPose,
     args: argparse.Namespace,
+    hand: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None, str | None]:
     """Plan a base-frame gripper target pose for one perceived object."""
+
+    screwdriver_result = make_screwdriver_handle_gripper_pose(
+        target,
+        args,
+        hand=hand or "",
+    )
+    if screwdriver_result is not None:
+        gripper_pose, _metadata = screwdriver_result
+        return gripper_pose, None, "screwdriver_handle_z_yaw_policy"
 
     object_pose = np.asarray(target.base_pose, dtype=np.float64)
     fallback_reason = validate_pose_matrix(object_pose)
@@ -38,7 +51,7 @@ def make_gripper_target_pose(
 
     if fallback_reason is not None:
         gripper_pose = make_fixed_front_gripper_target_pose(target, args)
-        gripper_pose = apply_downward_end_effector_tilt(gripper_pose, args)
+        gripper_pose = apply_downward_end_effector_tilt(gripper_pose, args, hand=hand)
         return gripper_pose, None, fallback_reason
 
     gripper_pose = build_grasp_pose(object_pose, target.label)
@@ -46,5 +59,5 @@ def make_gripper_target_pose(
     gripper_pose = apply_grasp_tcp_offset(gripper_pose, args)
     if args.ik_target_stage == "pregrasp":
         gripper_pose = apply_pregrasp_offset(gripper_pose, args)
-    gripper_pose = apply_downward_end_effector_tilt(gripper_pose, args)
+    gripper_pose = apply_downward_end_effector_tilt(gripper_pose, args, hand=hand)
     return gripper_pose, template, None

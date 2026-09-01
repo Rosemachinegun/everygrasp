@@ -58,7 +58,7 @@ def natural_wrist_orientation_quat(
 ) -> tuple[float, float, float, float]:
     """Return a safe wrist orientation close to the configured natural pose."""
 
-    natural_quat = ik_wrist_orientation_quat(args)
+    natural_quat = ik_wrist_orientation_quat(args, hand=hand)
 
     if reference_orientation_xyzw is not None:
         reference_quat = normalize_quaternion(reference_orientation_xyzw)
@@ -93,11 +93,12 @@ def natural_wrist_orientation_quat(
 def wrist_orientation_source(
     args,
     *,
+    hand: str | None = None,
     reference_orientation_xyzw: tuple[float, float, float, float] | None = None,
 ) -> str:
     if reference_orientation_xyzw is None:
         return "natural+bias"
-    natural_quat = ik_wrist_orientation_quat(args)
+    natural_quat = ik_wrist_orientation_quat(args, hand=hand)
     reference_quat = normalize_quaternion(reference_orientation_xyzw)
     angle_deg = np.rad2deg(quaternion_angle_rad(natural_quat, reference_quat))
     if angle_deg <= safe_wrist_max_deviation_deg(args):
@@ -125,6 +126,7 @@ def apply_side_approach_to_pick_waypoints(
     )
     orientation_source = wrist_orientation_source(
         args,
+        hand=hand,
         reference_orientation_xyzw=reference_orientation_xyzw,
     )
 

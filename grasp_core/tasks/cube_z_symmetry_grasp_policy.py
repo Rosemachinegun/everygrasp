@@ -7,15 +7,17 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from grasp_core.core.pose_math import PickTemplateWaypoint, normalize_object_type
+from grasp_core.core.pose_math import PickTemplateWaypoint
 from grasp_core.core.robot_target_pose import TargetObjectPose
+from grasp_core.tasks.screwdriver_handle_grasp_policy import (
+    is_screwdriver_handle_object,
+)
 
 LEFT_GRASP_SECTOR_DEG = (60.0, 150.0)
 RIGHT_GRASP_SECTOR_DEG = (210.0, 300.0)
 LEFT_FALLBACK_ANGLE_DEG = 105.0
 RIGHT_FALLBACK_ANGLE_DEG = 255.0
 HAND_SIDE_EPS = 1e-8
-YELLOW_DUCK_OBJECT_TYPE = "yellow_duck"
 WORLD_Z_AXIS = np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
 
 
@@ -46,31 +48,34 @@ def apply_cube_z_symmetry_grasp_policy(
     args,
     relative_pick_waypoints: list[PickTemplateWaypoint] | None = None,
 ) -> CubeZSymmetrySelection | None:
-    """Select a FlowPose-equivalent cube pose whose local -X faces the gripper.
+    """Select a FlowPose-equivalent pose for the active grasp policy.
 
-    The cube's local Z axis and translation are preserved.  Only the local X/Y
-    axes are changed by one of the 0, +90, 180 or -90 degree symmetries around
-    local Z.
+    The pose is made Z-up first.  Generic objects use the local -X gripper
+    facing rule.  Screwdriver handles keep their raw FlowPose pose so the
+    dedicated screwdriver policy can choose the long axis from size + pose.
     """
 
     del relative_pick_waypoints
     if not bool(getattr(args, "use_cube_z_symmetry_grasp_policy", False)):
         return None
+    if is_screwdriver_handle_object(target.label):
+        return None
     object_pose = np.asarray(target.base_pose, dtype=np.float64)
     if object_pose.shape != (4, 4) or not np.all(np.isfinite(object_pose)):
         return None
-    if is_yellow_duck_object(target.label):
-        object_pose = pose_with_world_z_axis(object_pose)
+    object_pose = pose_with_world_z_axis(object_pose)
 
     candidates = tuple(make_candidates(object_pose))
     raw = candidates[0]
     interval_hand = hand_interval_for_y(float(object_pose[1, 3])) or hand
     desired_y_sign = desired_side_sign(interval_hand)
-    sector = grasp_sector_for_hand(interval_hand)
-    fallback_angle_deg = fallback_angle_for_hand(interval_hand)
-    if desired_y_sign == 0.0 or sector is None or fallback_angle_deg is None:
+    if desired_y_sign == 0.0:
         return None
 
+    sector = grasp_sector_for_hand(interval_hand)
+    fallback_angle_deg = fallback_angle_for_hand(interval_hand)
+    if sector is None or fallback_angle_deg is None:
+        return None
     best = select_best_candidate(
         candidates,
         sector,
@@ -92,10 +97,6 @@ def apply_cube_z_symmetry_grasp_policy(
         raw_candidate=raw,
         desired_y_sign=desired_y_sign,
     )
-
-
-def is_yellow_duck_object(object_type: str) -> bool:
-    return normalize_object_type(object_type) == YELLOW_DUCK_OBJECT_TYPE
 
 
 def pose_with_world_z_axis(object_pose: np.ndarray) -> np.ndarray:

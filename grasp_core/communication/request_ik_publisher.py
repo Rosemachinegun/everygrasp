@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 import argparse
 import csv
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,8 @@ from grasp_core.communication.joint_trajectory_csv import (
 from grasp_core.core.pose_math import (
     PoseWaypoint,
     checked_position,
+    ik_downward_tilt_deg_for_hand,
+    ik_downward_tilt_y_deg_for_hand,
     ik_wrist_orientation_quat,
     normalize_object_type,
     normalize_quaternion,
@@ -102,6 +105,7 @@ class RequestIkTargetPublisher:
         self._joint_trajectory_csv_rows: list[dict[str, object]] = []
         self._joint_trajectory_csv_time_s = 0.0
         self._joint_trajectory_csv_default_hand: str | None = None
+        self._stop_event = threading.Event()
 
         self.client = Ros2PoseTargetPublisher(
             left_topic=left_topic,
@@ -115,6 +119,16 @@ class RequestIkTargetPublisher:
     def close(self) -> None:
         self.finish_joint_trajectory_csv_recording()
         self.client.close()
+
+    def request_stop(self) -> None:
+        self._stop_event.set()
+        self.node.get_logger().warning("request_ik target publishing stop requested")
+
+    def clear_stop(self) -> None:
+        self._stop_event.clear()
+
+    def stop_requested(self) -> bool:
+        return self._stop_event.is_set()
 
     def begin_joint_trajectory_csv_recording(self, hand: str | None = None) -> None:
         if not self.record_joint_trajectory_csv:
@@ -167,12 +181,16 @@ class RequestIkTargetPublisher:
         self._start_trajectory_record(hand, [(position, orientation)], [])
         self._append_trajectory_sample(position, orientation)
 
-        while self.client.ok() and time.monotonic() < deadline:
+        while (
+            self.client.ok()
+            and not self.stop_requested()
+            and time.monotonic() < deadline
+        ):
             self.client.publish_pose(hand, position, orientation)
             count += 1
             time.sleep(period_sec)
 
-        if count == 0 and self.client.ok():
+        if count == 0 and self.client.ok() and not self.stop_requested():
             self.client.publish_pose(hand, position, orientation)
             count = 1
 
@@ -273,7 +291,7 @@ class RequestIkTargetPublisher:
             trajectory.samples,
             sample_periods_sec,
         ):
-            if not self.client.ok():
+            if not self.client.ok() or self.stop_requested():
                 break
             self._append_trajectory_sample(position, orientation)
             self.client.publish_pose(hand, position, orientation)
@@ -284,12 +302,16 @@ class RequestIkTargetPublisher:
         if final_hold_sec is not None:
             target_final_hold_sec = max(float(final_hold_sec), 0.0)
         hold_deadline = time.monotonic() + target_final_hold_sec
-        while self.client.ok() and time.monotonic() < hold_deadline:
+        while (
+            self.client.ok()
+            and not self.stop_requested()
+            and time.monotonic() < hold_deadline
+        ):
             self.client.publish_pose(hand, end_position, end_orientation)
             count += 1
             time.sleep(period_sec)
 
-        if count == 0 and self.client.ok():
+        if count == 0 and self.client.ok() and not self.stop_requested():
             self.client.publish_pose(hand, end_position, end_orientation)
             count = 1
 
@@ -311,7 +333,7 @@ class RequestIkTargetPublisher:
         duration_sec: float,
     ) -> int:
         duration_sec = max(float(duration_sec), 0.0)
-        if duration_sec <= 0.0:
+        if duration_sec <= 0.0 or self.stop_requested():
             return 0
         position = checked_position(position_xyz)
         orientation = normalize_quaternion(orientation_xyzw)
@@ -418,11 +440,18 @@ class RequestIkTargetPublisher:
                     final_hold_sec=final_hold_sec,
                     terminal_slowdown=terminal_slowdown and is_last_segment,
                 )
+                if self.stop_requested():
+                    completed_path = False
+                    break
                 current_position, current_orientation = trajectory.raw_waypoints[
                     waypoint_index + 1
                 ]
                 group_start = sample_offset
-                if is_callback_stop and on_after_waypoint is not None:
+                if (
+                    not self.stop_requested()
+                    and is_callback_stop
+                    and on_after_waypoint is not None
+                ):
                     total_count += on_after_waypoint[waypoint_index](
                         self,
                         hand,
@@ -449,7 +478,7 @@ class RequestIkTargetPublisher:
             segment_samples = trajectory.samples[sample_offset : sample_offset + steps]
             sample_offset += steps
             for position, orientation in segment_samples:
-                if not self.client.ok():
+                if not self.client.ok() or self.stop_requested():
                     completed_path = False
                     break
                 self._append_trajectory_sample(position, orientation)
@@ -462,7 +491,11 @@ class RequestIkTargetPublisher:
             current_position, current_orientation = trajectory.raw_waypoints[
                 waypoint_index + 1
             ]
-            if on_after_waypoint is not None and waypoint_index in on_after_waypoint:
+            if (
+                not self.stop_requested()
+                and on_after_waypoint is not None
+                and waypoint_index in on_after_waypoint
+            ):
                 total_count += on_after_waypoint[waypoint_index](
                     self,
                     hand,
@@ -474,12 +507,16 @@ class RequestIkTargetPublisher:
         if final_hold_sec is not None:
             path_final_hold_sec = max(float(final_hold_sec), 0.0)
         hold_deadline = time.monotonic() + path_final_hold_sec
-        while self.client.ok() and time.monotonic() < hold_deadline:
+        while (
+            self.client.ok()
+            and not self.stop_requested()
+            and time.monotonic() < hold_deadline
+        ):
             self.client.publish_pose(hand, current_position, current_orientation)
             total_count += 1
             time.sleep(period_sec)
 
-        if total_count == 0 and self.client.ok():
+        if total_count == 0 and self.client.ok() and not self.stop_requested():
             self.client.publish_pose(hand, current_position, current_orientation)
             total_count = 1
 
@@ -525,6 +562,8 @@ class RequestIkTargetPublisher:
     ) -> int:
         if not samples:
             return 0
+        if self.stop_requested():
+            return 0
         period_sec = 1.0 / self.publish_rate_hz
         for position, orientation in samples:
             self._append_trajectory_sample(position, orientation)
@@ -542,6 +581,8 @@ class RequestIkTargetPublisher:
         )
         self._save_joint_trajectory_csv(hand, samples, period_sec)
         time.sleep(sum(sample_periods_sec))
+        if self.stop_requested():
+            return count
         trajectory_final_hold_sec = self.publish_sec
         if final_hold_sec is not None:
             trajectory_final_hold_sec = max(float(final_hold_sec), 0.0)
@@ -1160,7 +1201,7 @@ def publish_home_request_ik_target(
         return status
 
     position = np.asarray(home_xyz, dtype=np.float64)
-    orientation = ik_wrist_orientation_quat(args)
+    orientation = ik_wrist_orientation_quat(args, hand=hand)
     # Directly publish the single home target (no multi-waypoint home path)
     home_waypoints = [(position, orientation)]
     count = publish_request_ik_target(
@@ -1175,6 +1216,8 @@ def publish_home_request_ik_target(
 
     topic = args.left_target_topic if hand == "left" else args.right_target_topic
     qx, qy, qz, qw = orientation
+    tilt_deg = ik_downward_tilt_deg_for_hand(args, hand)
+    tilt_y_deg = ik_downward_tilt_y_deg_for_hand(args, hand)
     status = (
         f"Published {hand} home target "
         f"xyz=({position[0]:.3f},{position[1]:.3f},{position[2]:.3f})m"
@@ -1184,7 +1227,9 @@ def publish_home_request_ik_target(
         f"hand={hand} topic={topic} frame={args.ik_frame_id} count={count} "
         f"waypoints={len(home_waypoints)} "
         f"position=({position[0]:.4f}, {position[1]:.4f}, {position[2]:.4f}) m "
-        f"orientation_xyzw=({qx:.5f}, {qy:.5f}, {qz:.5f}, {qw:.5f})",
+        f"orientation_xyzw=({qx:.5f}, {qy:.5f}, {qz:.5f}, {qw:.5f}) "
+        f"tilt={tilt_deg:.2f}deg/{args.ik_downward_tilt_axis}+y={tilt_y_deg:.2f}deg/"
+        f"{args.ik_downward_tilt_frame}",
         flush=True,
     )
     return status
@@ -1239,6 +1284,8 @@ def publish_request_ik_path(
     if not bool(getattr(args, "target_smooth_trajectory", True)):
         count = 0
         for waypoint_index, (position, orientation) in enumerate(waypoints):
+            if publisher.stop_requested():
+                break
             if (
                 final_hold_sec is not None
                 and waypoint_index == len(waypoints) - 1
@@ -1252,7 +1299,11 @@ def publish_request_ik_path(
                     publisher.publish_sec = original_publish_sec
             else:
                 count += publisher.publish_target(hand, position, orientation)
-            if on_after_waypoint is not None and waypoint_index in on_after_waypoint:
+            if (
+                not publisher.stop_requested()
+                and on_after_waypoint is not None
+                and waypoint_index in on_after_waypoint
+            ):
                 count += on_after_waypoint[waypoint_index](
                     publisher,
                     hand,

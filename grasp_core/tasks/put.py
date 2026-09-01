@@ -25,9 +25,8 @@ from grasp_core.core.pose_math import (
 from grasp_core.core.robot_target_pose import matrix_to_quaternion
 
 FIXED_PUT_RIGHT_XYZ = (0.54, -0.30, 0.826)
-#FIXED_PUT_RIGHT_XYZ = (0.54, -0.30, 0.776)
-FIXED_PUT_LEFT_XYZ = (0.559, 0.350, 0.772)
-FIXED_PUT_OBJECT_XYZ = {
+# FIXED_PUT_RIGHT_XYZ = (0.54, -0.30, 0.776)
+FIXED_PUT_OBJECT_RIGHT_XYZ = {
     "yellow_cube": (0.40, -0.40, 0.86),
     "yellow_duck": (0.37, -0.33, 0.80),
     "blue_cube": (0.35, -0.35, 0.83),
@@ -128,15 +127,30 @@ def fixed_put_xyz_for_hand(
     hand: str,
     object_type: str | None = None,
 ) -> tuple[float, float, float]:
+    hand_name = normalize_hand(hand)
     if object_type:
         object_name = normalize_object_type(object_type)
-        if object_name in FIXED_PUT_OBJECT_XYZ:
-            return FIXED_PUT_OBJECT_XYZ[object_name]
+        if object_name in FIXED_PUT_OBJECT_RIGHT_XYZ:
+            return mirror_right_xyz_for_hand(
+                FIXED_PUT_OBJECT_RIGHT_XYZ[object_name],
+                hand_name,
+            )
 
-    hand_name = str(hand).strip().lower()
-    if hand_name == "left":
-        return FIXED_PUT_LEFT_XYZ
-    return FIXED_PUT_RIGHT_XYZ
+    return mirror_right_xyz_for_hand(FIXED_PUT_RIGHT_XYZ, hand_name)
+
+
+def normalize_hand(hand: str) -> str:
+    return "left" if str(hand).strip().lower() == "left" else "right"
+
+
+def mirror_right_xyz_for_hand(
+    right_xyz: tuple[float, float, float],
+    hand: str,
+) -> tuple[float, float, float]:
+    x, y, z = (float(value) for value in right_xyz)
+    if hand == "left":
+        return x, abs(y), z
+    return x, -abs(y), z
 
 
 def publisher_stop_requested(publisher: RequestIkTargetPublisher) -> bool:
@@ -159,13 +173,16 @@ def execute_fixed_put_after_grasp(
     *,
     grasp_confirmed: bool,
     object_type: str | None = None,
+    keep_put_pose: bool = False,
 ) -> FixedPutResult:
-    """Return ok=True only when the full place-release-home sequence completes.
+    """Place and release, optionally keeping the released put pose.
 
     The caller must pass grasp_confirmed=True from a completed gripper grip result.
     Without that explicit confirmation this function refuses to publish any put target.
+    When keep_put_pose=True, no Home target is published and the publisher's
+    remembered target remains the put pose for the next grasp.
     """
-    hand = "left" if str(hand).strip().lower() == "left" else "right"
+    hand = normalize_hand(hand)
     if not bool(grasp_confirmed):
         status = f"{hand} put blocked: gripper has not confirmed a successful grasp"
         print(f"[put] {status}", flush=True)
@@ -184,7 +201,7 @@ def execute_fixed_put_after_grasp(
     put_target_hold_sec = max(float(getattr(args, "put_target_hold_sec", 0.05)), 0.0)
     put_home_hold_sec = max(float(getattr(args, "put_home_hold_sec", 0.05)), 0.0)
     position = np.asarray(fixed_put_xyz_for_hand(hand, object_type), dtype=np.float64)
-    orientation = ik_wrist_orientation_quat(args)
+    orientation = ik_wrist_orientation_quat(args, hand=hand)
     waypoints = humanlike_put_waypoints(publisher, hand, position, orientation, args)
     count = publish_request_ik_path(
         publisher,
@@ -216,6 +233,11 @@ def execute_fixed_put_after_grasp(
         status = f"{hand} put release ok"
         print(f"[put] {status}", flush=True)
 
+    if bool(keep_put_pose):
+        keep_status = f"{hand} kept at put pose; next grasp starts here"
+        print(f"[put] {keep_status}", flush=True)
+        return FixedPutResult(True, f"{status}; {keep_status}")
+
     if publisher_stop_requested(publisher):
         stop_status = f"STOPPED by B before {hand} home target publishing"
         print(f"[put] {stop_status}", flush=True)
@@ -238,11 +260,12 @@ def publish_fixed_put_after_grasp(
     *,
     grasp_confirmed: bool = False,
     object_type: str | None = None,
+    keep_put_pose: bool = False,
 ) -> bool:
     """Boolean one-call wrapper for fixed put.
 
-    True means the put target was published, the gripper release succeeded,
-    and the home request was sent. False means nothing was placed or a step failed.
+    True means the put target was reached and release succeeded. With
+    keep_put_pose=True, Home is deliberately skipped; otherwise Home must also succeed.
     """
     return execute_fixed_put_after_grasp(
         publisher,
@@ -250,10 +273,11 @@ def publish_fixed_put_after_grasp(
         args,
         grasp_confirmed=grasp_confirmed,
         object_type=object_type,
+        keep_put_pose=keep_put_pose,
     ).ok
 
 
 def position_for_home(hand: str, args: argparse.Namespace) -> tuple[float, float, float]:
-    if str(hand).strip().lower() == "left":
+    if normalize_hand(hand) == "left":
         return args.left_home_xyz
     return args.right_home_xyz

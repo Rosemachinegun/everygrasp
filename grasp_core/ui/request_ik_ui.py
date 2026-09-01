@@ -56,7 +56,7 @@ def make_dashboard(
     footer = np.full((footer_h, body.shape[1], 3), 26, dtype=np.uint8)
     put_text = "auto put on" if put_enabled else "auto put off"
     text = (
-        f"S: target | H: right home | J: left home | L: grip | P: release | "
+        f"C: target | S: pause/resume | H/J: right/left home | L/P: grip/release selected or both | "
         f"{put_text} | Q/Esc: quit | "
         f"SAM3 pending={sam_pending} FlowPose pending={flowpose_pending} | {status}"
     )

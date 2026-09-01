@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 
 from grasp_core.communication.request_ik_publisher import terminal_sample_periods
+from grasp_core.communication.ros2_pose_publisher import trajectory_linear_velocities
 from grasp_core.motion.trajectory import plan_pose_path, position_tangents
 
 
@@ -38,6 +39,42 @@ def test_plan_pose_path_keeps_final_sample_on_target() -> None:
 
     assert len(plan.samples) == sum(plan.segment_steps)
     np.testing.assert_allclose(plan.samples[-1][0], target)
+
+
+def test_plan_pose_path_limits_actual_curve_step_size() -> None:
+    max_step_m = 0.003
+    plan = plan_pose_path(
+        np.array([0.0, 0.0, 0.0]),
+        IDENTITY_QUAT,
+        [
+            (np.array([0.08, 0.0, 0.0]), IDENTITY_QUAT),
+            (np.array([0.08, 0.08, 0.0]), IDENTITY_QUAT),
+            (np.array([0.14, 0.08, 0.0]), IDENTITY_QUAT),
+        ],
+        max_step_m=max_step_m,
+        max_step_deg=5.0,
+        min_steps=2,
+    )
+
+    previous = np.array([0.0, 0.0, 0.0])
+    for position, _orientation in plan.samples:
+        assert np.linalg.norm(position - previous) <= max_step_m * 1.001
+        previous = position
+
+
+def test_trajectory_linear_velocities_use_smooth_boundaries() -> None:
+    velocities = trajectory_linear_velocities(
+        [
+            np.array([0.0, 0.0, 0.0]),
+            np.array([0.01, 0.0, 0.0]),
+            np.array([0.02, 0.0, 0.0]),
+        ],
+        [0.1, 0.1, 0.1],
+    )
+
+    np.testing.assert_allclose(velocities[0], np.zeros(3))
+    np.testing.assert_allclose(velocities[1], np.array([0.1, 0.0, 0.0]))
+    np.testing.assert_allclose(velocities[2], np.zeros(3))
 
 
 def test_terminal_sample_periods_only_changes_timing_tail() -> None:
