@@ -22,6 +22,7 @@ DEFAULT_DAIMON_STUFF_DIR = PROJECT_ROOT / "daimon_stuff"
 DEFAULT_RECEIVER_PATH = DEFAULT_DAIMON_STUFF_DIR / "grip_signal_receiver.py"
 
 _RECEIVER_OPTION_MAP = {
+    "gripper_hand": "--hand",
     "gripper_server": "--server",
     "gripper_clamp_pos": "--clamp-pos",
     "gripper_open_pos": "--open-pos",
@@ -42,6 +43,8 @@ _RECEIVER_OPTION_MAP = {
     "gripper_contact_grace": "--contact-grace",
     "gripper_progress_epsilon": "--progress-epsilon",
     "gripper_stall_samples": "--stall-samples",
+    "gripper_empty_grip_margin": "--empty-grip-margin",
+    "gripper_target_pos_tolerance": "--target-pos-tolerance",
     "gripper_timeout": "--timeout",
     "gripper_grip_done_wait": "--grip-done-wait",
     "gripper_release_target": "--release-target",
@@ -54,6 +57,7 @@ _RECEIVER_OPTION_MAP = {
 def _expected_receiver_status_tokens(args: argparse.Namespace) -> list[str]:
     tokens = []
     expected_attrs = {
+        "gripper_hand": "hand",
         "gripper_server": "server",
         "gripper_clamp_pos": "clamp_pos",
         "gripper_open_pos": "open_pos",
@@ -62,6 +66,8 @@ def _expected_receiver_status_tokens(args: argparse.Namespace) -> list[str]:
         "gripper_min_pos": "min_pos",
         "gripper_max_pos": "max_pos",
         "gripper_release_target": "release_target",
+        "gripper_empty_grip_margin": "empty_grip_margin",
+        "gripper_target_pos_tolerance": "target_pos_tolerance",
         "gripper_grip_done_wait": "grip_done_wait",
         "gripper_connect_attempts": "connect_attempts",
         "gripper_allow_homing_fallback": "allow_homing_fallback",
@@ -119,14 +125,19 @@ def _disable_proxy_for_host(addr: str) -> None:
         os.environ[key] = ",".join(hosts)
 
 
-def _query_gripper_receiver(args: argparse.Namespace, command: str = "status") -> str:
+def _query_gripper_receiver(
+    args: argparse.Namespace,
+    command: str = "status",
+    *,
+    reply_timeout_sec: float | None = None,
+) -> str:
     host = str(args.grip_signal_host)
     port = int(args.grip_signal_port)
     timeout_sec = max(float(args.grip_signal_timeout_sec), 0.01)
     with socket.create_connection((host, port), timeout=timeout_sec) as sock:
         sock.sendall(_receiver_message(command, args).encode("utf-8"))
         sock.shutdown(socket.SHUT_WR)
-        sock.settimeout(timeout_sec)
+        sock.settimeout(max(float(reply_timeout_sec or timeout_sec), 0.01))
         return sock.recv(4096).decode("utf-8", errors="replace").strip()
 
 
@@ -137,12 +148,42 @@ def _dual_gripper_enabled(args: argparse.Namespace) -> bool:
 def _receiver_args(
     args: argparse.Namespace,
     *,
+    hand: str,
     port: int,
     server: str,
 ) -> argparse.Namespace:
     copied = argparse.Namespace(**vars(args))
+    copied.gripper_hand = hand
     copied.grip_signal_port = port
     copied.gripper_server = server
+    if hand == "left":
+        for name in (
+            "clamp_pos",
+            "open_pos",
+            "max_itinerary",
+            "speed_coe",
+            "min_pos",
+            "max_pos",
+            "grip_speed",
+            "grip_torque",
+            "hold_torque",
+            "current_threshold",
+            "poll_interval",
+            "contact_grace",
+            "progress_epsilon",
+            "stall_samples",
+            "empty_grip_margin",
+            "target_pos_tolerance",
+            "timeout",
+            "grip_done_wait",
+            "release_target",
+            "release_speed",
+            "release_torque",
+            "release_wait",
+        ):
+            left_attr = f"left_gripper_{name}"
+            if hasattr(copied, left_attr):
+                setattr(copied, f"gripper_{name}", getattr(copied, left_attr))
     return copied
 
 
@@ -163,6 +204,7 @@ def gripper_receiver_args(
             "left",
             _receiver_args(
                 args,
+                hand="left",
                 port=base_port,
                 server=str(
                     getattr(
@@ -177,6 +219,7 @@ def gripper_receiver_args(
             "right",
             _receiver_args(
                 args,
+                hand="right",
                 port=base_port + 1,
                 server=str(
                     getattr(
@@ -220,6 +263,7 @@ def _start_single_gripper_signal_receiver(
             flush=True,
         )
         _warn_receiver_config_mismatch(reply, args)
+        _check_single_gripper_signal_receiver(args, label=label)
         return None
 
     receiver_path = Path(
@@ -275,10 +319,41 @@ def _start_single_gripper_signal_receiver(
             time.sleep(0.05)
             continue
         print(f"[gripper:{label}] receiver ready: {reply}", flush=True)
+        _check_single_gripper_signal_receiver(args, label=label)
         return process
 
     print(f"[gripper:{label}] receiver start timed out: {last_error}", flush=True)
     return process
+
+
+def _check_single_gripper_signal_receiver(
+    args: argparse.Namespace,
+    *,
+    label: str,
+) -> str:
+    command_timeout_sec = max(
+        float(getattr(args, "grip_signal_command_timeout_sec", 60.0)),
+        0.01,
+    )
+    try:
+        reply = _query_gripper_receiver(
+            args,
+            command="check",
+            reply_timeout_sec=command_timeout_sec,
+        )
+    except OSError as exc:
+        status = f"ERR startup check failed: {exc}"
+        print(f"[gripper:{label}] {status}", flush=True)
+        return status
+    action = "startup check OK" if reply.startswith("OK") else "startup check failed"
+    print(f"[gripper:{label}] {action}: {reply}", flush=True)
+    if "command must be" in reply and "check" not in reply:
+        print(
+            f"[gripper:{label}] existing receiver is from an older version; "
+            "restart flowpose_request_ik_tester.py so startup checks are available",
+            flush=True,
+        )
+    return reply
 
 
 def start_gripper_signal_receiver(
@@ -318,7 +393,7 @@ def _send_single_gripper_signal(
     label: str,
 ) -> str:
     command = str(command).strip()
-    if command not in {"grip", "release"}:
+    if command not in {"grip", "release", "check"}:
         status = f"Invalid gripper command: {command!r}"
         print(f"[gripper:{label}] {status}", flush=True)
         return status

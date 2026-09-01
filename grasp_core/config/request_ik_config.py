@@ -42,6 +42,7 @@ DEFAULT_ROBOT_XACRO_PATH = PROJECT_ROOT / "config" / "stand_v3.urf.xacro"
 
 
 DEFAULT_TOOL_TEMPLATE_PATH = PROJECT_ROOT / "config" / "tool.yaml"
+DEFAULT_SAM3_ROI_XYXY = (249, 9, 589, 326)
 
 
 @dataclass(frozen=True)
@@ -49,62 +50,175 @@ class GripSignalDefaults:
     host: str = "127.0.0.1"
     port: int = 55660
     timeout_sec: float = 0.5
-    command_timeout_sec: float = 60.0
+    command_timeout_sec: float = 5.0
     receiver_path: Path = PROJECT_ROOT / "daimon_stuff" / "grip_signal_receiver.py"
-    settle_sec: float = 0.05
+    settle_sec: float = 0.0
     post_confirm_hold_sec: float = 0.0
-    lift_hold_sec: float = 0.05
-    retry_max_attempts: int = 3
+    lift_hold_sec: float = 0.0
+    retry_max_attempts: int = 1
 
 
 @dataclass(frozen=True)
 class GripperDefaults:
-    left_server: str = "192.168.10.10:55551"
+    left_server: str = "192.168.14.11:55551"
     right_server: str = "192.168.10.11:55551"
     dual: bool = True
-    clamp_pos: int = -52525
-    open_pos: int = -142525
-    max_itinerary: int = 90000
-    speed_coe: int = 3600
+    left_clamp_pos: int = -52525
+    right_clamp_pos: int = -52525
+    left_open_pos: int = -142525
+    right_open_pos: int = -142525
+    left_max_itinerary: int = 90000
+    right_max_itinerary: int = 90000
+    left_speed_coe: int = 3600
+    right_speed_coe: int = 3600
     calibration_tolerance: int = 150
     connect_attempts: int = 3
     connect_timeout_sec: float = 2.0
     connect_retry_delay_sec: float = 0.2
-    allow_homing_fallback: bool = True
-    min_pos: int = 100
-    max_pos: int = 1000
-    grip_speed: int = 60
-    grip_torque: int = 30
-    hold_torque: int = 18
-    current_threshold: int = 120
-    poll_interval: float = 0.05
-    contact_grace: float = 0.4
-    progress_epsilon: int = 2
-    stall_samples: int = 5
-    timeout: float = 20.0
-    grip_done_wait: float = 0.05
-    release_target: int = 1000
-    release_speed: int = 60
-    release_torque: int = 20
-    release_wait: float = 0.05
+    allow_homing_fallback: bool = False
+    left_min_pos: int = 100
+    right_min_pos: int = 100
+    left_max_pos: int = 1000
+    right_max_pos: int = 1000
+    left_grip_speed: int = 60
+    right_grip_speed: int = 60
+    left_grip_torque: int = 30
+    right_grip_torque: int = 30
+    left_hold_torque: int = 18
+    right_hold_torque: int = 18
+    left_current_threshold: int = 120
+    right_current_threshold: int = 120
+    left_poll_interval: float = 0.05
+    right_poll_interval: float = 0.05
+    left_contact_grace: float = 0.4
+    right_contact_grace: float = 0.4
+    left_progress_epsilon: int = 2
+    right_progress_epsilon: int = 2
+    left_stall_samples: int = 5
+    right_stall_samples: int = 5
+    left_empty_grip_margin: int = 150
+    right_empty_grip_margin: int = 0
+    left_target_pos_tolerance: int = 120
+    right_target_pos_tolerance: int = 120
+    left_timeout: float = 5.0
+    right_timeout: float = 5.0
+    left_grip_done_wait: float = 0.05
+    right_grip_done_wait: float = 0.05
+    left_release_target: int = 1000
+    right_release_target: int = 1000
+    left_release_speed: int = 60
+    right_release_speed: int = 60
+    left_release_torque: int = 20
+    right_release_torque: int = 20
+    left_release_wait: float = 0.05
+    right_release_wait: float = 0.05
 
     @property
     def server(self) -> str:
         return self.right_server
 
+    @property
+    def clamp_pos(self) -> int:
+        return self.right_clamp_pos
+
+    @property
+    def open_pos(self) -> int:
+        return self.right_open_pos
+
+    @property
+    def max_itinerary(self) -> int:
+        return self.right_max_itinerary
+
+    @property
+    def speed_coe(self) -> int:
+        return self.right_speed_coe
+
+    @property
+    def min_pos(self) -> int:
+        return self.right_min_pos
+
+    @property
+    def max_pos(self) -> int:
+        return self.right_max_pos
+
+    @property
+    def grip_speed(self) -> int:
+        return self.right_grip_speed
+
+    @property
+    def grip_torque(self) -> int:
+        return self.right_grip_torque
+
+    @property
+    def hold_torque(self) -> int:
+        return self.right_hold_torque
+
+    @property
+    def current_threshold(self) -> int:
+        return self.right_current_threshold
+
+    @property
+    def poll_interval(self) -> float:
+        return self.right_poll_interval
+
+    @property
+    def contact_grace(self) -> float:
+        return self.right_contact_grace
+
+    @property
+    def progress_epsilon(self) -> int:
+        return self.right_progress_epsilon
+
+    @property
+    def stall_samples(self) -> int:
+        return self.right_stall_samples
+
+    @property
+    def empty_grip_margin(self) -> int:
+        return self.right_empty_grip_margin
+
+    @property
+    def target_pos_tolerance(self) -> int:
+        return self.right_target_pos_tolerance
+
+    @property
+    def timeout(self) -> float:
+        return self.right_timeout
+
+    @property
+    def grip_done_wait(self) -> float:
+        return self.right_grip_done_wait
+
+    @property
+    def release_target(self) -> int:
+        return self.right_release_target
+
+    @property
+    def release_speed(self) -> int:
+        return self.right_release_speed
+
+    @property
+    def release_torque(self) -> int:
+        return self.right_release_torque
+
+    @property
+    def release_wait(self) -> float:
+        return self.right_release_wait
+
 
 @dataclass(frozen=True)
 class HomeDefaults:
     right_xyz: tuple[float, float, float] = (0.25, -0.25, 0.81)
-    left_xyz: tuple[float, float, float] = (0.31, 0.35, 0.84)
+    left_xyz: tuple[float, float, float] = (0.25, 0.25, 0.81)
     safe_z_m: float = 0.95
     side_clearance_y_m: float = 0.28
 
 
 @dataclass(frozen=True)
 class PutDefaults:
-    target_hold_sec: float = 0.05
+    target_hold_sec: float = 0.0
     home_hold_sec: float = 0.05
+    keep_put_pose: bool = True
 
 
 @dataclass(frozen=True)
@@ -165,8 +279,12 @@ class GraspConfig:
     ik_pregrasp_extra_offset_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     ik_orientation_quat: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     ik_downward_tilt_deg: float = 45.0
+    ik_downward_tilt_left_deg: float | None = None
+    ik_downward_tilt_right_deg: float | None = None
     ik_downward_tilt_axis: str = "y"
     ik_downward_tilt_y_deg: float = 0.0
+    ik_downward_tilt_y_left_deg: float | None = None
+    ik_downward_tilt_y_right_deg: float | None = None
     ik_downward_tilt_frame: str = "local"
     visualize_grasp_path: bool = True
     save_joint_trajectory_csv: bool = False
@@ -349,11 +467,47 @@ def tool_grasp_defaults_from_yaml(path: Path) -> GraspConfig:
             fallback=cfg.ik_downward_tilt_deg,
             name="ik_downward_tilt_deg",
         ),
+        ik_downward_tilt_left_deg=(
+            None
+            if defaults.get("ik_downward_tilt_left_deg") is None
+            else parse_config_float(
+                defaults.get("ik_downward_tilt_left_deg"),
+                fallback=cfg.ik_downward_tilt_deg,
+                name="ik_downward_tilt_left_deg",
+            )
+        ),
+        ik_downward_tilt_right_deg=(
+            None
+            if defaults.get("ik_downward_tilt_right_deg") is None
+            else parse_config_float(
+                defaults.get("ik_downward_tilt_right_deg"),
+                fallback=cfg.ik_downward_tilt_deg,
+                name="ik_downward_tilt_right_deg",
+            )
+        ),
         ik_downward_tilt_axis=axis,
         ik_downward_tilt_y_deg=parse_config_float(
             defaults.get("ik_downward_tilt_y_deg", cfg.ik_downward_tilt_y_deg),
             fallback=cfg.ik_downward_tilt_y_deg,
             name="ik_downward_tilt_y_deg",
+        ),
+        ik_downward_tilt_y_left_deg=(
+            None
+            if defaults.get("ik_downward_tilt_y_left_deg") is None
+            else parse_config_float(
+                defaults.get("ik_downward_tilt_y_left_deg"),
+                fallback=cfg.ik_downward_tilt_y_deg,
+                name="ik_downward_tilt_y_left_deg",
+            )
+        ),
+        ik_downward_tilt_y_right_deg=(
+            None
+            if defaults.get("ik_downward_tilt_y_right_deg") is None
+            else parse_config_float(
+                defaults.get("ik_downward_tilt_y_right_deg"),
+                fallback=cfg.ik_downward_tilt_y_deg,
+                name="ik_downward_tilt_y_right_deg",
+            )
         ),
         ik_downward_tilt_frame=frame,
         visualize_grasp_path=parse_config_bool(
@@ -373,10 +527,18 @@ def tool_grasp_defaults_from_yaml(path: Path) -> GraspConfig:
 
 
 def apply_grasp_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    cli_tilt_override = getattr(args, "ik_downward_tilt_deg", None) is not None
+    cli_tilt_y_override = getattr(args, "ik_downward_tilt_y_deg", None) is not None
     config = tool_grasp_defaults_from_yaml(Path(args.tool_template_path).expanduser())
     for field_name, config_value in config.__dict__.items():
         if getattr(args, field_name, None) is None:
             setattr(args, field_name, config_value)
+    if cli_tilt_override:
+        args.ik_downward_tilt_left_deg = None
+        args.ik_downward_tilt_right_deg = None
+    if cli_tilt_y_override:
+        args.ik_downward_tilt_y_left_deg = None
+        args.ik_downward_tilt_y_right_deg = None
     if getattr(args, "target_trajectory_plot", None) is not None:
         args.visualize_grasp_path = bool(args.target_trajectory_plot)
     args.target_trajectory_plot = bool(args.visualize_grasp_path)
@@ -390,7 +552,11 @@ def apply_grasp_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
         f"flowpose_rotation={bool(args.use_flowpose_grasp_rotation)} "
         f"cube_z_symmetry_policy={bool(args.use_cube_z_symmetry_grasp_policy)} "
         f"tilt={float(args.ik_downward_tilt_deg):.2f}deg/"
+        f"left={getattr(args, 'ik_downward_tilt_left_deg', None)} "
+        f"right={getattr(args, 'ik_downward_tilt_right_deg', None)} "
         f"{args.ik_downward_tilt_axis}+y={float(args.ik_downward_tilt_y_deg):.2f}deg/"
+        f"y_left={getattr(args, 'ik_downward_tilt_y_left_deg', None)} "
+        f"y_right={getattr(args, 'ik_downward_tilt_y_right_deg', None)} "
         f"{args.ik_downward_tilt_frame} "
         f"side_approach_policy=disabled "
         f"visualize_grasp_path={bool(args.visualize_grasp_path)} "
@@ -401,6 +567,45 @@ def apply_grasp_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def normalize_gripper_args(args: argparse.Namespace) -> argparse.Namespace:
+    args.left_gripper_clamp_pos = int(args.left_gripper_clamp_pos)
+    args.left_gripper_open_pos = int(args.left_gripper_open_pos)
+    args.left_gripper_max_itinerary = max(int(args.left_gripper_max_itinerary), 1)
+    args.left_gripper_speed_coe = max(int(args.left_gripper_speed_coe), 1)
+    args.left_gripper_min_pos = int(clamp(args.left_gripper_min_pos, 0, 1000))
+    args.left_gripper_max_pos = int(clamp(args.left_gripper_max_pos, 0, 1000))
+    args.left_gripper_release_target = int(
+        clamp(args.left_gripper_release_target, 0, 1000)
+    )
+    args.left_gripper_grip_speed = int(clamp(args.left_gripper_grip_speed, 10, 100))
+    args.left_gripper_release_speed = int(
+        clamp(args.left_gripper_release_speed, 10, 100)
+    )
+    args.left_gripper_grip_torque = int(clamp(args.left_gripper_grip_torque, 10, 100))
+    args.left_gripper_hold_torque = int(clamp(args.left_gripper_hold_torque, 10, 100))
+    args.left_gripper_release_torque = int(
+        clamp(args.left_gripper_release_torque, 10, 100)
+    )
+    args.left_gripper_current_threshold = max(
+        int(args.left_gripper_current_threshold), 0
+    )
+    args.left_gripper_poll_interval = max(float(args.left_gripper_poll_interval), 0.02)
+    args.left_gripper_contact_grace = max(float(args.left_gripper_contact_grace), 0.0)
+    args.left_gripper_progress_epsilon = max(
+        int(args.left_gripper_progress_epsilon), 0
+    )
+    args.left_gripper_stall_samples = max(int(args.left_gripper_stall_samples), 1)
+    args.left_gripper_empty_grip_margin = max(
+        int(args.left_gripper_empty_grip_margin), 0
+    )
+    args.left_gripper_target_pos_tolerance = max(
+        int(args.left_gripper_target_pos_tolerance), 0
+    )
+    args.left_gripper_timeout = max(float(args.left_gripper_timeout), 0.1)
+    args.left_gripper_grip_done_wait = max(
+        float(args.left_gripper_grip_done_wait), 0.0
+    )
+    args.left_gripper_release_wait = max(float(args.left_gripper_release_wait), 0.0)
+
     args.gripper_min_pos = int(clamp(args.gripper_min_pos, 0, 1000))
     args.gripper_max_pos = int(clamp(args.gripper_max_pos, 0, 1000))
     args.gripper_release_target = int(clamp(args.gripper_release_target, 0, 1000))
@@ -413,6 +618,10 @@ def normalize_gripper_args(args: argparse.Namespace) -> argparse.Namespace:
     args.gripper_contact_grace = max(float(args.gripper_contact_grace), 0.0)
     args.gripper_progress_epsilon = max(int(args.gripper_progress_epsilon), 0)
     args.gripper_stall_samples = max(int(args.gripper_stall_samples), 1)
+    args.gripper_empty_grip_margin = max(int(args.gripper_empty_grip_margin), 0)
+    args.gripper_target_pos_tolerance = max(
+        int(args.gripper_target_pos_tolerance), 0
+    )
     args.gripper_timeout = max(float(args.gripper_timeout), 0.1)
     args.gripper_grip_done_wait = max(float(args.gripper_grip_done_wait), 0.0)
     args.gripper_release_wait = max(float(args.gripper_release_wait), 0.0)
@@ -456,9 +665,36 @@ def normalize_gripper_args(args: argparse.Namespace) -> argparse.Namespace:
         float(args.gripper_connect_retry_delay_sec),
         0.0,
     )
+    args.sam3_roi_xyxy = normalize_roi_xyxy(
+        args.sam3_roi_xyxy,
+        width=args.width,
+        height=args.height,
+    )
     if args.gripper_min_pos > args.gripper_max_pos:
         raise SystemExit("--gripper-min-pos must be <= --gripper-max-pos")
+    if args.left_gripper_min_pos > args.left_gripper_max_pos:
+        raise SystemExit("--left-gripper-min-pos must be <= --left-gripper-max-pos")
     return args
+
+
+def normalize_roi_xyxy(
+    roi_xyxy: tuple[int, int, int, int] | list[int] | None,
+    *,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int] | None:
+    if roi_xyxy is None:
+        return None
+    x_min, y_min, x_max, y_max = (int(value) for value in roi_xyxy)
+    x_min = int(clamp(x_min, 0, max(int(width) - 1, 0)))
+    x_max = int(clamp(x_max, 0, int(width)))
+    y_min = int(clamp(y_min, 0, max(int(height) - 1, 0)))
+    y_max = int(clamp(y_max, 0, int(height)))
+    if x_max <= x_min or y_max <= y_min:
+        raise SystemExit(
+            "--sam3-roi-xyxy must satisfy x_max > x_min and y_max > y_min"
+        )
+    return (x_min, y_min, x_max, y_max)
 
 
 def parse_args() -> argparse.Namespace:
@@ -469,7 +705,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--prompts", default="yellow cube, blue cube,yellow duck")
+    parser.add_argument("--prompts", default="toy,yellow_screwdriver_handle")
     parser.add_argument("--sam3-checkpoint-path", default="/model/sam3.pt")
     parser.add_argument("--sam3-root", default=None)
     parser.add_argument(
@@ -497,6 +733,23 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_CONTAINMENT_MIN_AREA_RATIO,
     )
     parser.add_argument("--sam3-resolution", type=int, default=1008)
+    parser.add_argument(
+        "--sam3-roi-xyxy",
+        nargs=4,
+        type=int,
+        default=DEFAULT_SAM3_ROI_XYXY,
+        metavar=("X_MIN", "Y_MIN", "X_MAX", "Y_MAX"),
+        help=(
+            "Only keep SAM3 detections whose bbox center is inside this pixel ROI. "
+            "Defaults to the ROI calibrated by test1.py."
+        ),
+    )
+    parser.add_argument(
+        "--sam3-roi-filter",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Filter SAM3 detections by --sam3-roi-xyxy before FlowPose.",
+    )
     parser.add_argument(
         "--sam3-device", default="auto", choices=["auto", "cuda", "cpu"]
     )
@@ -530,6 +783,16 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Show FlowPose targets converted into base_link coordinates.",
+    )
+    parser.add_argument(
+        "--auto-pipeline-on-a",
+        type=parse_bool,
+        default=True,
+        metavar="TRUE/FALSE",
+        help=(
+            "TRUE makes A run capture -> SAM3 -> FlowPose -> grasp automatically; "
+            "FALSE restores manual A/B/C steps."
+        ),
     )
     parser.add_argument(
         "--force-object-z",
@@ -911,23 +1174,143 @@ def parse_args() -> argparse.Namespace:
         help="Remote CAN gRPC server for the left gripper.",
     )
     parser.add_argument(
+        "--left-gripper-clamp-pos",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_clamp_pos,
+    )
+    parser.add_argument(
+        "--left-gripper-open-pos",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_open_pos,
+    )
+    parser.add_argument(
+        "--left-gripper-max-itinerary",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_max_itinerary,
+    )
+    parser.add_argument(
+        "--left-gripper-speed-coe",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_speed_coe,
+    )
+    parser.add_argument(
+        "--left-gripper-min-pos",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_min_pos,
+    )
+    parser.add_argument(
+        "--left-gripper-max-pos",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_max_pos,
+    )
+    parser.add_argument(
+        "--left-gripper-grip-speed",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_grip_speed,
+    )
+    parser.add_argument(
+        "--left-gripper-grip-torque",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_grip_torque,
+    )
+    parser.add_argument(
+        "--left-gripper-hold-torque",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_hold_torque,
+    )
+    parser.add_argument(
+        "--left-gripper-current-threshold",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_current_threshold,
+    )
+    parser.add_argument(
+        "--left-gripper-poll-interval",
+        type=float,
+        default=GRIPPER_DEFAULTS.left_poll_interval,
+    )
+    parser.add_argument(
+        "--left-gripper-contact-grace",
+        type=float,
+        default=GRIPPER_DEFAULTS.left_contact_grace,
+    )
+    parser.add_argument(
+        "--left-gripper-progress-epsilon",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_progress_epsilon,
+    )
+    parser.add_argument(
+        "--left-gripper-stall-samples",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_stall_samples,
+    )
+    parser.add_argument(
+        "--left-gripper-empty-grip-margin",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_empty_grip_margin,
+    )
+    parser.add_argument(
+        "--left-gripper-target-pos-tolerance",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_target_pos_tolerance,
+    )
+    parser.add_argument(
+        "--left-gripper-timeout",
+        type=float,
+        default=GRIPPER_DEFAULTS.left_timeout,
+    )
+    parser.add_argument(
+        "--left-gripper-grip-done-wait",
+        type=float,
+        default=GRIPPER_DEFAULTS.left_grip_done_wait,
+    )
+    parser.add_argument(
+        "--left-gripper-release-target",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_release_target,
+    )
+    parser.add_argument(
+        "--left-gripper-release-speed",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_release_speed,
+    )
+    parser.add_argument(
+        "--left-gripper-release-torque",
+        type=int,
+        default=GRIPPER_DEFAULTS.left_release_torque,
+    )
+    parser.add_argument(
+        "--left-gripper-release-wait",
+        type=float,
+        default=GRIPPER_DEFAULTS.left_release_wait,
+    )
+    parser.add_argument(
         "--right-gripper-server",
         default=GRIPPER_DEFAULTS.right_server,
         help="Remote CAN gRPC server for the right gripper.",
     )
     parser.add_argument(
-        "--gripper-clamp-pos", type=int, default=GRIPPER_DEFAULTS.clamp_pos
+        "--gripper-clamp-pos",
+        "--right-gripper-clamp-pos",
+        type=int,
+        default=GRIPPER_DEFAULTS.clamp_pos,
     )
     parser.add_argument(
-        "--gripper-open-pos", type=int, default=GRIPPER_DEFAULTS.open_pos
+        "--gripper-open-pos",
+        "--right-gripper-open-pos",
+        type=int,
+        default=GRIPPER_DEFAULTS.open_pos,
     )
     parser.add_argument(
         "--gripper-max-itinerary",
+        "--right-gripper-max-itinerary",
         type=int,
         default=GRIPPER_DEFAULTS.max_itinerary,
     )
     parser.add_argument(
-        "--gripper-speed-coe", type=int, default=GRIPPER_DEFAULTS.speed_coe
+        "--gripper-speed-coe",
+        "--right-gripper-speed-coe",
+        type=int,
+        default=GRIPPER_DEFAULTS.speed_coe,
     )
     parser.add_argument(
         "--gripper-calibration-tolerance",
@@ -961,62 +1344,120 @@ def parse_args() -> argparse.Namespace:
             "calibration init fails. This performs a homing motion."
         ),
     )
-    parser.add_argument("--gripper-min-pos", type=int, default=GRIPPER_DEFAULTS.min_pos)
-    parser.add_argument("--gripper-max-pos", type=int, default=GRIPPER_DEFAULTS.max_pos)
     parser.add_argument(
-        "--gripper-grip-speed", type=int, default=GRIPPER_DEFAULTS.grip_speed
+        "--gripper-min-pos",
+        "--right-gripper-min-pos",
+        type=int,
+        default=GRIPPER_DEFAULTS.min_pos,
     )
     parser.add_argument(
-        "--gripper-grip-torque", type=int, default=GRIPPER_DEFAULTS.grip_torque
+        "--gripper-max-pos",
+        "--right-gripper-max-pos",
+        type=int,
+        default=GRIPPER_DEFAULTS.max_pos,
     )
     parser.add_argument(
-        "--gripper-hold-torque", type=int, default=GRIPPER_DEFAULTS.hold_torque
+        "--gripper-grip-speed",
+        "--right-gripper-grip-speed",
+        type=int,
+        default=GRIPPER_DEFAULTS.grip_speed,
+    )
+    parser.add_argument(
+        "--gripper-grip-torque",
+        "--right-gripper-grip-torque",
+        type=int,
+        default=GRIPPER_DEFAULTS.grip_torque,
+    )
+    parser.add_argument(
+        "--gripper-hold-torque",
+        "--right-gripper-hold-torque",
+        type=int,
+        default=GRIPPER_DEFAULTS.hold_torque,
     )
     parser.add_argument(
         "--gripper-current-threshold",
+        "--right-gripper-current-threshold",
         type=int,
         default=GRIPPER_DEFAULTS.current_threshold,
     )
     parser.add_argument(
-        "--gripper-poll-interval", type=float, default=GRIPPER_DEFAULTS.poll_interval
+        "--gripper-poll-interval",
+        "--right-gripper-poll-interval",
+        type=float,
+        default=GRIPPER_DEFAULTS.poll_interval,
     )
     parser.add_argument(
         "--gripper-contact-grace",
+        "--right-gripper-contact-grace",
         type=float,
         default=GRIPPER_DEFAULTS.contact_grace,
     )
     parser.add_argument(
         "--gripper-progress-epsilon",
+        "--right-gripper-progress-epsilon",
         type=int,
         default=GRIPPER_DEFAULTS.progress_epsilon,
     )
     parser.add_argument(
-        "--gripper-stall-samples", type=int, default=GRIPPER_DEFAULTS.stall_samples
+        "--gripper-stall-samples",
+        "--right-gripper-stall-samples",
+        type=int,
+        default=GRIPPER_DEFAULTS.stall_samples,
     )
-    parser.add_argument("--gripper-timeout", type=float, default=GRIPPER_DEFAULTS.timeout)
+    parser.add_argument(
+        "--gripper-empty-grip-margin",
+        "--right-gripper-empty-grip-margin",
+        type=int,
+        default=GRIPPER_DEFAULTS.empty_grip_margin,
+        help=(
+            "If grip stalls at or below gripper-min-pos plus this margin, treat it "
+            "as an empty/min-limit grasp failure instead of confirmed contact."
+        ),
+    )
+    parser.add_argument(
+        "--gripper-target-pos-tolerance",
+        "--right-gripper-target-pos-tolerance",
+        type=int,
+        default=GRIPPER_DEFAULTS.target_pos_tolerance,
+        help=(
+            "Warn when the measured gripper SDK position is farther than this "
+            "from the commanded target; useful for detecting bad known calibration."
+        ),
+    )
+    parser.add_argument(
+        "--gripper-timeout",
+        "--right-gripper-timeout",
+        type=float,
+        default=GRIPPER_DEFAULTS.timeout,
+    )
     parser.add_argument(
         "--gripper-grip-done-wait",
+        "--right-gripper-grip-done-wait",
         type=float,
         default=GRIPPER_DEFAULTS.grip_done_wait,
         help="Seconds the gripper receiver waits after hold torque before reporting grip done.",
     )
     parser.add_argument(
         "--gripper-release-target",
+        "--right-gripper-release-target",
         type=int,
         default=GRIPPER_DEFAULTS.release_target,
     )
     parser.add_argument(
         "--gripper-release-speed",
+        "--right-gripper-release-speed",
         type=int,
         default=GRIPPER_DEFAULTS.release_speed,
     )
     parser.add_argument(
         "--gripper-release-torque",
+        "--right-gripper-release-torque",
         type=int,
         default=GRIPPER_DEFAULTS.release_torque,
     )
     parser.add_argument(
         "--gripper-release-wait",
+        "--right-gripper-release-wait",
         type=float,
         default=GRIPPER_DEFAULTS.release_wait,
     )
@@ -1077,5 +1518,15 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=PUT_DEFAULTS.home_hold_sec,
         help="Seconds to hold the home target after put release.",
+    )
+    parser.add_argument(
+        "--put-keep-pose",
+        type=parse_bool,
+        default=PUT_DEFAULTS.keep_put_pose,
+        metavar="TRUE/FALSE",
+        help=(
+            "TRUE keeps the arm at the released put pose and starts the next "
+            "A-key grasp from there; FALSE returns the arm home after release."
+        ),
     )
     return apply_grasp_config_defaults(parser.parse_args())

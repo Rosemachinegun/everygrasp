@@ -1,7 +1,7 @@
 # everygrasp 目录说明
 
 `grasp_core/` 是当前机器人抓取项目的主体代码包。一级目录只保留顶层包文件和说明文档，所有业务代码都放在二级功能目录中。
-![System Architecture](pipeline.png)
+![System Architecture](frame.png)
 
 ## 功能目录
 
@@ -51,4 +51,8 @@ flowpose_request_ik_tester.py
     |4
     |python daimon_stuff/tac.py --remote-addr 192.168.10.10:50051 --dev-id 0 --pc-host 192.168.10.123 --pc-port 60032
 - `gripper/` 不再放 Python 文件，Daimon 相关入口统一放在 `daimon_stuff/`
+
+直接按 L：双夹爪一起闭合。
+先按 J 再按 L：只闭合左夹爪。
+先按 H 再按 L：只闭合右夹爪。
 # DaimonGeneral

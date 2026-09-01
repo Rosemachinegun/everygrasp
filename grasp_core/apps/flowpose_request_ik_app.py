@@ -57,6 +57,7 @@ from grasp_core.core.pose_math import select_ik_hand  # noqa: E402
 from grasp_core.tasks.robot_actions import (  # noqa: E402
     RobotActionService,
     grip_confirmed,
+    grip_failed_min_limit,
     grip_success_hand,
 )
 from grasp_core.planning.tool_pick_templates import load_tool_pick_templates  # noqa: E402
@@ -64,11 +65,14 @@ from grasp_core.planning.tool_pick_templates import load_tool_pick_templates  # 
 
 # OpenCV returns a single byte for keyboard input, so normalize to lowercase once.
 KEY_QUIT = {ord("q"), 27}
-KEY_RUN_PIPELINE = ord("a")
+KEY_CAPTURE = ord("a")
+KEY_FLOWPOSE = ord("b")
+KEY_TARGET = ord("c")
 KEY_RIGHT_HOME = ord("h")
 KEY_LEFT_HOME = ord("j")
 KEY_GRIP = ord("l")
 KEY_RELEASE = ord("p")
+KEY_PAUSE = ord("s")
 
 DASHBOARD_WINDOW = "RealSense + SAM3 + FlowPose"
 
@@ -114,6 +118,7 @@ class RuntimeState:
     grasp_confirmed_hand: str | None = None
     grasp_confirmed_label: str | None = None
     last_gripper_hand: str | None = None
+    paused: bool = False
 
 
 def is_pending(future: Future | None) -> bool:
@@ -137,6 +142,8 @@ class GraspDemoApp:
         self.state = RuntimeState()
         self.gripper_future: Future | None = None
         self.gripper_future_command: str | None = None
+        self.gripper_future_hand: str | None = None
+        self.grasp_future: Future | None = None
 
         sam_kwargs, flowpose_kwargs, capture_dir = build_runner_kwargs(args)
         self.sam_kwargs = sam_kwargs
@@ -237,22 +244,49 @@ class GraspDemoApp:
             status = f"Gripper command failed: {exc}"
         self.state.status = status
         command = self.gripper_future_command
-        if command == "grip" and grip_confirmed(status):
-            self.state.grasp_confirmed = True
-            self.state.grasp_confirmed_hand = (
-                grip_success_hand(status) or self.state.last_gripper_hand
-            )
-            self.state.grasp_confirmed_label = self.current_target_label()
-            self.state.last_gripper_hand = self.state.grasp_confirmed_hand
-            self.auto_put_after_confirmed_grasp()
+        hand = self.gripper_future_hand
+        if command == "grip":
+            if grip_failed_min_limit(status):
+                failed_hand = (
+                    hand
+                    if hand in {"left", "right"}
+                    else grip_success_hand(status) or self.state.last_gripper_hand
+                )
+                self.state.grasp_confirmed = False
+                self.state.grasp_confirmed_hand = None
+                self.state.grasp_confirmed_label = None
+                if failed_hand in {"left", "right"}:
+                    self.state.last_gripper_hand = failed_hand
+                self.gripper_future = None
+                self.gripper_future_command = None
+                self.gripper_future_hand = None
+                self.start_grip_failure_recovery(
+                    status,
+                    failed_hand=failed_hand if failed_hand in {"left", "right"} else None,
+                )
+                return
+
+            if grip_confirmed(status) and hand in {"left", "right"}:
+                self.state.grasp_confirmed = True
+                self.state.grasp_confirmed_hand = (
+                    grip_success_hand(status) or self.state.last_gripper_hand
+                )
+                self.state.grasp_confirmed_label = self.current_target_label()
+                self.state.last_gripper_hand = self.state.grasp_confirmed_hand
+                self.auto_put_after_confirmed_grasp()
+            else:
+                self.state.grasp_confirmed = False
+                self.state.grasp_confirmed_hand = None
+                self.state.grasp_confirmed_label = None
         elif command == "release":
             self.state.grasp_confirmed = False
             self.state.grasp_confirmed_hand = None
             self.state.grasp_confirmed_label = None
         self.gripper_future = None
         self.gripper_future_command = None
+        self.gripper_future_hand = None
 
-    def gripper_hand_for_manual_command(self) -> str:
+    def gripper_hand_for_manual_command(self) -> str | None:
         if self.state.grasp_confirmed_hand in {"left", "right"}:
             return self.state.grasp_confirmed_hand
         if self.state.last_gripper_hand in {"left", "right"}:
@@ -266,6 +300,8 @@ class GraspDemoApp:
         )
         if self.state.base_targets:
             return select_ik_hand(self.state.base_targets[index].base_xyz, hand_mode)
+        if bool(getattr(self.args, "dual_gripper", False)):
+            return None
         return "right"
 
     def current_target_label(self) -> str | None:
@@ -277,14 +313,20 @@ class GraspDemoApp:
         )
         return self.state.base_targets[index].label
 
+    def auto_pipeline_on_a(self) -> bool:
+        return bool(getattr(self.args, "auto_pipeline_on_a", True))
+
     def send_gripper(self, command: str, hand: str | None = None) -> None:
         if self.gripper_future is not None and not self.gripper_future.done():
             self.state.status = "Gripper command already running"
             return
         hand = hand or self.gripper_hand_for_manual_command()
-        self.state.last_gripper_hand = hand
-        self.state.status = f"Gripper {command} running hand={hand}"
+        if hand in {"left", "right"}:
+            self.state.last_gripper_hand = hand
+        target_label = hand if hand in {"left", "right"} else "both"
+        self.state.status = f"Gripper {command} running hand={target_label}"
         self.gripper_future_command = command
+        self.gripper_future_hand = hand
         self.gripper_future = self.gripper_executor.submit(
             send_gripper_signal,
             command,
@@ -324,6 +366,7 @@ class GraspDemoApp:
             self.args.prompts,
             meta_path,
             metadata,
+            self.args,
         )
         # print(self.state)
 
@@ -399,8 +442,42 @@ class GraspDemoApp:
         if self.robot_actions is None:
             self.state.status = "Robot action service unavailable"
             return
+        if self.grasp_future is not None and not self.grasp_future.done():
+            self.state.status = "Grasp action already running"
+            return
+        if self.ik_publisher is not None:
+            self.ik_publisher.clear_stop()
 
-        result = self.robot_actions.publish_grasp(self.state.base_targets)
+        targets = list(self.state.base_targets)
+        self.grasp_future = self.action_executor.submit(
+            self.robot_actions.publish_grasp,
+            targets,
+        )
+        self.state.status = "Grasp action running"
+
+    def collect_grasp_result(self) -> None:
+        if self.grasp_future is None or not self.grasp_future.done():
+            return
+        try:
+            result = self.grasp_future.result()
+        except Exception as exc:  # noqa: BLE001
+            self.state.status = f"Grasp action failed: {exc}"
+            print(f"[request_ik_tester] {self.state.status}", flush=True)
+            self.grasp_future = None
+            return
+        self.grasp_future = None
+        self.finish_grasp_result(result)
+
+    def finish_grasp_result(self, result) -> None:
+        if self.state.paused or (
+            self.ik_publisher is not None and self.ik_publisher.stop_requested()
+        ):
+            self.state.grasp_confirmed = False
+            self.state.grasp_confirmed_hand = None
+            self.state.grasp_confirmed_label = None
+            self.state.status = f"Paused by S; grasp result held: {result.status}"
+            return
+
         self.state.status = result.status
 
         if result.failed_min_limit or not result.ok:
@@ -466,16 +543,16 @@ class GraspDemoApp:
         s = self.state
         s.pipeline_stage = PipelineStage.IDLE
 
-        if not bool(getattr(self.args, "grip_retry_loop", True)):
-            s.status = f"{failed_status}; retry loop disabled"
-            return
         if s.recovery_futures:
             s.status = "Grip failure recovery already running"
             return
 
         s.retry_attempts += 1
         max_attempts = max(int(getattr(self.args, "grip_retry_max_attempts", 3)), 0)
-        s.retry_will_regrasp = max_attempts == 0 or s.retry_attempts <= max_attempts
+        retry_enabled = bool(getattr(self.args, "grip_retry_loop", True))
+        s.retry_will_regrasp = retry_enabled and (
+            max_attempts == 0 or s.retry_attempts <= max_attempts
+        )
 
         hand = failed_hand or ("left" if self.args.ik_hand == "left" else "right")
         s.last_gripper_hand = hand
@@ -499,7 +576,11 @@ class GraspDemoApp:
         retry_text = (
             f"retry {s.retry_attempts}"
             if s.retry_will_regrasp
-            else f"retry limit reached ({max_attempts})"
+            else (
+                "retry loop disabled"
+                if not retry_enabled
+                else f"retry limit reached ({max_attempts})"
+            )
         )
         s.status = f"Grip failed; returning {hand} home and releasing in parallel; {retry_text}"
         print(f"[grip_retry] {s.status}", flush=True)
@@ -652,8 +733,22 @@ class GraspDemoApp:
 
     def render(self, bundle) -> None:
         """Render the live camera, SAM3 overlay and FlowPose overlay."""
+        live_image = bundle.color_image
+        if bool(getattr(self.args, "sam3_roi_filter", True)):
+            roi_xyxy = getattr(self.args, "sam3_roi_xyxy", None)
+            if roi_xyxy is not None:
+                live_image = bundle.color_image.copy()
+                x_min, y_min, x_max, y_max = roi_xyxy
+                cv2.rectangle(
+                    live_image,
+                    (int(x_min), int(y_min)),
+                    (int(x_max), int(y_max)),
+                    (0, 255, 0),
+                    2,
+                    cv2.LINE_AA,
+                )
         live_panel = draw_live_hud(
-            bundle.color_image,
+            live_image,
             f"frame={bundle.frame_id} depth_scale={bundle.depth_scale:.6f}",
         )
         dashboard = make_dashboard(
@@ -675,8 +770,37 @@ class GraspDemoApp:
         if key in KEY_QUIT:
             return False
 
-        if key == KEY_RUN_PIPELINE:
-            self.start_pipeline()
+        if key == KEY_PAUSE:
+            self.state.paused = not self.state.paused
+            if self.state.paused:
+                if self.ik_publisher is not None:
+                    self.ik_publisher.request_stop()
+                self.state.status = "Paused by S: target publishing stop requested"
+            else:
+                if self.ik_publisher is not None:
+                    self.ik_publisher.clear_stop()
+                self.state.status = "Resumed by S"
+            return True
+
+        if self.state.paused:
+            return True
+
+        if key == KEY_CAPTURE:
+            if self.auto_pipeline_on_a():
+                self.start_pipeline()
+            else:
+                fresh_bundle = self.camera.read_latest()
+                if fresh_bundle is None:
+                    self.state.status = "Capture failed: no fresh camera frame"
+                else:
+                    self.reset_retry(reset_attempts=True)
+                    self.submit_sam3(fresh_bundle)
+        elif key == KEY_FLOWPOSE and not self.auto_pipeline_on_a():
+            self.reset_retry()
+            self.submit_flowpose()
+        elif key == KEY_TARGET and not self.auto_pipeline_on_a():
+            self.reset_retry(reset_attempts=True)
+            self.publish_grasp()
         elif key == KEY_RIGHT_HOME:
             self.state.last_gripper_hand = "right"
             if self.robot_actions is not None:
@@ -704,10 +828,16 @@ class GraspDemoApp:
                 print("[camera] failed to read frame; retrying...", flush=True)
                 continue
 
-            self.collect_inference_results()
-            self.advance_pipeline()
+            if self.state.paused:
+                if not self.state.status.startswith("Paused by S"):
+                    self.state.status = "Paused by S"
+            else:
+                self.collect_inference_results()
+                self.advance_pipeline()
+            self.collect_grasp_result()
             self._collect_gripper_result()
-            self.update_recovery()
+            if not self.state.paused:
+                self.update_recovery()
            # self.advance_replan_state(bundle)
             self.render(bundle)
 

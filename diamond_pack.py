@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-if str(PROJECT_ROOT) not in sys.path:
+if str(PROJECT_ROOT) not in sys.path:   
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from daimon_stuff.dm_gripper_cam_py.viewer_config import camera_specs_from_args  # noqa: E402
@@ -53,7 +53,7 @@ CAMERA_PANEL_SIZE = (480, 270)
 TACTILE_PANEL_SIZE = (640, 480)
 STATUS_HEIGHT = 56
 
-DEFAULT_LEFT_GRIPPER_SERVER = "192.168.10.10:55551"
+DEFAULT_LEFT_GRIPPER_SERVER = "192.168.14.11:55551"
 DEFAULT_RIGHT_GRIPPER_SERVER = "192.168.10.11:55551"
 
 
@@ -85,14 +85,14 @@ TACTILE_SPECS: dict[int, TactileSpec] = {
     ),
     3: TactileSpec(
         sensor_id=3,
-        remote_addr="192.168.10.10:50052",
+        remote_addr="192.168.14.11:50052",
         dev_id="2",
         pc_host="192.168.10.123",
         pc_port=60033,
     ),
     4: TactileSpec(
         sensor_id=4,
-        remote_addr="192.168.10.10:50051",
+        remote_addr="192.168.14.11:50051",
         dev_id="0",
         pc_host="192.168.10.123",
         pc_port=60032,
@@ -527,7 +527,7 @@ def build_argparser() -> argparse.ArgumentParser:
     )
 
     # Remote dual camera options mirror daimon_stuff/dm_gripper_cam_py.
-    parser.add_argument("--left-host", default="192.168.10.10")
+    parser.add_argument("--left-host", default="192.168.14.11")
     parser.add_argument("--right-host", default="192.168.10.11")
     parser.add_argument("--port", type=int, default=50088)
     parser.add_argument("--codec", choices=("HEVC", "MJPG"), default="MJPG")

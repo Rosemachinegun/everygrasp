@@ -70,6 +70,12 @@ def plan_pose_path(
         current_position = end_position
         current_orientation = end_orientation
 
+    segment_steps = refine_segment_steps_for_limits(
+        raw_waypoints,
+        segment_steps,
+        max_step_m=max_step_m,
+        max_step_deg=max_step_deg,
+    )
     samples = interpolate_pose_samples(raw_waypoints, segment_steps)
     return TrajectoryPlan(
         raw_waypoints=raw_waypoints,
@@ -89,7 +95,7 @@ def interpolate_pose_samples(
     orientations = [
         normalize_quaternion(orientation) for _, orientation in raw_waypoints
     ]
-    tangents = position_tangents(positions)
+    tangents = position_tangents(positions, stop_at_endpoints=True)
     samples: list[PoseWaypoint] = []
 
     for segment_index, steps in enumerate(segment_steps):
@@ -117,7 +123,11 @@ def interpolate_pose_samples(
     return samples
 
 
-def position_tangents(positions: list[np.ndarray]) -> list[np.ndarray]:
+def position_tangents(
+    positions: list[np.ndarray],
+    *,
+    stop_at_endpoints: bool = False,
+) -> list[np.ndarray]:
     """Return clamped waypoint tangents so the target glides through waypoints."""
 
     count = len(positions)
@@ -128,7 +138,10 @@ def position_tangents(positions: list[np.ndarray]) -> list[np.ndarray]:
 
     tangents: list[np.ndarray] = []
     for index, position in enumerate(positions):
-        if index == 0:
+        if stop_at_endpoints and index in {0, count - 1}:
+            tangent = np.zeros(3, dtype=np.float64)
+            max_length = 0.0
+        elif index == 0:
             tangent = positions[1] - position
             max_length = float(np.linalg.norm(tangent))
         elif index == count - 1:
@@ -144,6 +157,86 @@ def position_tangents(positions: list[np.ndarray]) -> list[np.ndarray]:
             )
         tangents.append(clamp_vector_length(tangent, max_length))
     return tangents
+
+
+def refine_segment_steps_for_limits(
+    raw_waypoints: list[PoseWaypoint],
+    segment_steps: list[int],
+    *,
+    max_step_m: float,
+    max_step_deg: float,
+    max_iterations: int = 6,
+) -> list[int]:
+    """Increase segment sample counts until the actual curve respects limits."""
+
+    if len(raw_waypoints) < 2:
+        return []
+
+    positions = [checked_position(position).copy() for position, _ in raw_waypoints]
+    orientations = [
+        normalize_quaternion(orientation) for _, orientation in raw_waypoints
+    ]
+    tangents = position_tangents(positions, stop_at_endpoints=True)
+    refined_steps = [max(int(steps), 1) for steps in segment_steps]
+    linear_limit = max(float(max_step_m), 1e-4)
+    angular_limit = np.deg2rad(max(float(max_step_deg), 0.1))
+
+    for _ in range(max_iterations):
+        changed = False
+        for segment_index, steps in enumerate(refined_steps):
+            max_linear_step = 0.0
+            max_angular_step = 0.0
+            previous_position = positions[segment_index]
+            previous_orientation = orientations[segment_index]
+            for step in range(1, steps + 1):
+                alpha = float(step) / float(steps)
+                position = cubic_hermite_position(
+                    positions[segment_index],
+                    positions[segment_index + 1],
+                    tangents[segment_index],
+                    tangents[segment_index + 1],
+                    alpha,
+                )
+                orientation = slerp_quaternion(
+                    orientations[segment_index],
+                    orientations[segment_index + 1],
+                    alpha,
+                )
+                max_linear_step = max(
+                    max_linear_step,
+                    float(np.linalg.norm(position - previous_position)),
+                )
+                max_angular_step = max(
+                    max_angular_step,
+                    quaternion_step_rad(previous_orientation, orientation),
+                )
+                previous_position = position
+                previous_orientation = orientation
+
+            ratio = max(
+                max_linear_step / linear_limit,
+                max_angular_step / angular_limit,
+            )
+            if ratio > 1.0 + 1e-6:
+                refined_steps[segment_index] = max(
+                    steps + 1,
+                    int(np.ceil(float(steps) * ratio * 1.05)),
+                )
+                changed = True
+        if not changed:
+            break
+
+    return refined_steps
+
+
+def quaternion_step_rad(
+    start_xyzw: tuple[float, float, float, float],
+    end_xyzw: tuple[float, float, float, float],
+) -> float:
+    q0 = np.asarray(normalize_quaternion(start_xyzw), dtype=np.float64)
+    q1 = np.asarray(normalize_quaternion(end_xyzw), dtype=np.float64)
+    dot = abs(float(np.dot(q0, q1)))
+    return 2.0 * float(np.arccos(np.clip(dot, -1.0, 1.0)))
 
 
 def clamp_vector_length(vector: np.ndarray, max_length: float) -> np.ndarray:

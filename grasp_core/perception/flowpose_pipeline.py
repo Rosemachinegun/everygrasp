@@ -46,8 +46,8 @@ from grasp_core.tasks.cube_z_symmetry_grasp_policy import (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FLOWPOSE_ROOT = PROJECT_ROOT / "FlowPose"
 FLOWPOSE_PY_RUNNER_DIR = FLOWPOSE_ROOT / "py_runners"
-DEFAULT_FLOW_MODEL_PATH = PROJECT_ROOT / "model" / "FlowNet.pth"
-DEFAULT_SCALE_MODEL_PATH = PROJECT_ROOT / "model" / "ScaleNet.pth"
+DEFAULT_FLOW_MODEL_PATH = PROJECT_ROOT / "model" / "FlowNet3.pth"
+DEFAULT_SCALE_MODEL_PATH = PROJECT_ROOT / "model" / "ScaleNet3.pth"
 DEFAULT_CAPTURE_DIR = PROJECT_ROOT / "captures" / "flowpose_realsense"
 DEFAULT_DINO_REPO_CANDIDATES = [
     PROJECT_ROOT / "model" / "facebookresearch_dinov2_main",
@@ -709,6 +709,37 @@ def best_prompt_prediction(
     return best
 
 
+def filter_prediction_by_roi(
+    prediction: dict[str, Any],
+    roi_xyxy: tuple[int, int, int, int] | list[int] | None,
+    *,
+    enabled: bool,
+) -> tuple[dict[str, Any], int, int]:
+    """Keep only predictions whose bbox center falls inside the configured ROI."""
+
+    boxes = np.asarray(prediction.get("boxes", []), dtype=np.float32)
+    original_count = len(boxes)
+    if not enabled or roi_xyxy is None or original_count == 0:
+        return prediction, original_count, original_count
+
+    x_min, y_min, x_max, y_max = (float(value) for value in roi_xyxy)
+    centers_x = (boxes[:, 0] + boxes[:, 2]) * 0.5
+    centers_y = (boxes[:, 1] + boxes[:, 3]) * 0.5
+    keep = (
+        (centers_x >= x_min)
+        & (centers_x <= x_max)
+        & (centers_y >= y_min)
+        & (centers_y <= y_max)
+    )
+
+    filtered = dict(prediction)
+    for key in ("masks", "boxes", "scores"):
+        values = prediction.get(key)
+        if values is not None:
+            filtered[key] = values[keep]
+    return filtered, original_count, int(np.count_nonzero(keep))
+
+
 # ---------------------------------------------------------------------------
 # Pipeline execution functions
 # ---------------------------------------------------------------------------
@@ -721,6 +752,7 @@ def run_sam3_job(
     prompt: str,
     capture_meta_path: Path,
     capture_metadata: dict[str, Any],
+    args: argparse.Namespace | None = None,
 ) -> Sam3FrameResult:
     job_start = time.perf_counter()
     runner_init_sec = 0.0
@@ -731,6 +763,22 @@ def run_sam3_job(
     runner = runner_cache["runner"]
     infer_start = time.perf_counter()
     prediction = best_prompt_prediction(runner, bundle.color_image, prompt)
+    roi_xyxy = getattr(args, "sam3_roi_xyxy", None) if args is not None else None
+    roi_filter_enabled = (
+        bool(getattr(args, "sam3_roi_filter", False)) if args is not None else False
+    )
+    prediction, raw_count, roi_count = filter_prediction_by_roi(
+        prediction,
+        roi_xyxy,
+        enabled=roi_filter_enabled,
+    )
+    if roi_filter_enabled and roi_xyxy is not None:
+        print(
+            "[SAM3] ROI filter "
+            f"xyxy={tuple(int(value) for value in roi_xyxy)} "
+            f"kept={roi_count}/{raw_count}",
+            flush=True,
+        )
     selected_prompt = str(prediction.get("prompt") or prompt)
     infer_sec = time.perf_counter() - infer_start
 
@@ -748,7 +796,16 @@ def run_sam3_job(
     }
     result_path = save_inference_result(
         capture_meta_path,
-        {**capture_metadata, "sam3_timing": timing},
+        {
+            **capture_metadata,
+            "sam3_timing": timing,
+            "sam3_roi_filter": {
+                "enabled": roi_filter_enabled,
+                "roi_xyxy": list(roi_xyxy) if roi_xyxy is not None else None,
+                "raw_count": raw_count,
+                "kept_count": roi_count,
+            },
+        },
         postprocessed.detections,
         postprocessed.overlay,
     )

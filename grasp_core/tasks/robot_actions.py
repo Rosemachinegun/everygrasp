@@ -79,6 +79,7 @@ class RobotActionService:
             self.args,
             grasp_confirmed=grasp_confirmed,
             object_type=object_label,
+            keep_put_pose=bool(getattr(self.args, "put_keep_pose", True)),
         )
         return RobotActionResult(
             status=result.status,

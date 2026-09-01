@@ -17,6 +17,9 @@ import numpy as np
 import yaml
 
 from grasp_core.core.robot_target_pose import TargetObjectPose, matrix_to_quaternion
+from grasp_core.tasks.screwdriver_handle_grasp_policy import (
+    build_screwdriver_handle_pick_waypoints,
+)
 from grasp_core.config.request_ik_config import load_tool_yaml
 from grasp_core.core.pose_math import (
     PickTemplateWaypoint,
@@ -143,14 +146,24 @@ def build_pick_template_waypoints(
     target: TargetObjectPose,
     relative_waypoints: list[PickTemplateWaypoint],
     args: argparse.Namespace,
+    hand: str | None = None,
 ) -> list[PickTemplateWaypoint]:
+    screwdriver_waypoints = build_screwdriver_handle_pick_waypoints(
+        target,
+        relative_waypoints,
+        args,
+        hand=str(hand or ""),
+    )
+    if screwdriver_waypoints is not None:
+        return screwdriver_waypoints
+
     object_pose = np.asarray(target.base_pose, dtype=np.float64)
     fallback_reason = validate_pose_matrix(object_pose)
     if fallback_reason is not None:
         raise ValueError(f"invalid object pose for pick template: {fallback_reason}")
 
     waypoints: list[PickTemplateWaypoint] = []
-    fixed_orientation = ik_wrist_orientation_quat(args)
+    fixed_orientation = ik_wrist_orientation_quat(args, hand=hand)
     fixed_rotation = quaternion_to_rotation_matrix(fixed_orientation)
     for relative_xyz, _relative_quat, gripper_value in relative_waypoints:
         relative_point = np.ones(4, dtype=np.float64)

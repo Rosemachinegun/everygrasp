@@ -29,10 +29,13 @@ def ik_orientation_rotation(args: argparse.Namespace) -> np.ndarray:
     return quaternion_to_rotation_matrix(ik_orientation_quat(args))
 
 
-def ik_wrist_orientation_quat(args: argparse.Namespace) -> tuple[float, float, float, float]:
+def ik_wrist_orientation_quat(
+    args: argparse.Namespace,
+    hand: str | None = None,
+) -> tuple[float, float, float, float]:
     pose = np.eye(4, dtype=np.float64)
     pose[:3, :3] = ik_orientation_rotation(args)
-    pose = apply_downward_end_effector_tilt(pose, args)
+    pose = apply_downward_end_effector_tilt(pose, args, hand=hand)
     return normalize_quaternion(matrix_to_quaternion(pose))
 
 
@@ -151,10 +154,11 @@ def apply_grasp_rotation_mode(
 def apply_downward_end_effector_tilt(
     pose: np.ndarray,
     args: argparse.Namespace,
+    hand: str | None = None,
 ) -> np.ndarray:
     """Apply a tunable downward tilt to the end-effector orientation only."""
-    tilt_deg = float(getattr(args, "ik_downward_tilt_deg", 0.0) or 0.0)
-    tilt_y_deg = float(getattr(args, "ik_downward_tilt_y_deg", 0.0) or 0.0)
+    tilt_deg = ik_downward_tilt_deg_for_hand(args, hand)
+    tilt_y_deg = ik_downward_tilt_y_deg_for_hand(args, hand)
     if abs(tilt_deg) < 1e-8 and abs(tilt_y_deg) < 1e-8:
         return np.asarray(pose, dtype=np.float64).copy()
 
@@ -169,6 +173,30 @@ def apply_downward_end_effector_tilt(
     else:
         tilted_pose[:3, :3] = tilted_pose[:3, :3] @ tilt_rotation
     return tilted_pose
+
+
+def ik_downward_tilt_deg_for_hand(
+    args: argparse.Namespace,
+    hand: str | None,
+) -> float:
+    hand_name = str(hand or "").strip().lower()
+    if hand_name in {"left", "right"}:
+        hand_value = getattr(args, f"ik_downward_tilt_{hand_name}_deg", None)
+        if hand_value is not None:
+            return float(hand_value)
+    return float(getattr(args, "ik_downward_tilt_deg", 0.0) or 0.0)
+
+
+def ik_downward_tilt_y_deg_for_hand(
+    args: argparse.Namespace,
+    hand: str | None,
+) -> float:
+    hand_name = str(hand or "").strip().lower()
+    if hand_name in {"left", "right"}:
+        hand_value = getattr(args, f"ik_downward_tilt_y_{hand_name}_deg", None)
+        if hand_value is not None:
+            return float(hand_value)
+    return float(getattr(args, "ik_downward_tilt_y_deg", 0.0) or 0.0)
 
 
 def make_downward_tilt_rotation(

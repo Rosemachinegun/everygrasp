@@ -17,7 +17,10 @@ from typing import Callable
 import numpy as np
 
 from grasp_core.core.robot_target_pose import TargetObjectPose, matrix_to_quaternion
-from grasp_core.communication.gripper_signal import send_gripper_signal
+from grasp_core.communication.gripper_signal import (
+    gripper_receiver_args,
+    send_gripper_signal,
+)
 from grasp_core.planning.grasp_pose import make_gripper_target_pose
 from grasp_core.core.pose_math import (
     PickTemplateWaypoint,
@@ -26,6 +29,8 @@ from grasp_core.core.pose_math import (
     format_quat,
     format_xyz,
     home_position_for_hand,
+    ik_downward_tilt_deg_for_hand,
+    ik_downward_tilt_y_deg_for_hand,
     ik_wrist_orientation_quat,
     log_grasp_pose_plan,
     normalize_quaternion,
@@ -48,6 +53,7 @@ WaypointCallback = Callable[
     int,
 ]
 GripConfirmedCallback = Callable[[str, str], None]
+GRIP_MIN_LIMIT_TOKENS = ("GRASP_FAILED_MIN_LIMIT", "GRIP_FAILED_MIN_LIMIT")
 
 
 class GripFailedMinLimit(RuntimeError):
@@ -56,6 +62,28 @@ class GripFailedMinLimit(RuntimeError):
 
 class GripCommandFailed(RuntimeError):
     """Raised when a gripper command fails before completing normally."""
+
+
+def resolve_grasp_start_pose(
+    publisher: RequestIkTargetPublisher,
+    hand: str,
+    args: argparse.Namespace,
+) -> tuple[np.ndarray, tuple[float, float, float, float], str]:
+    """Use the last commanded pose, falling back to Home on the first grasp."""
+    remembered_start = publisher.remembered_target(hand)
+    if remembered_start is None:
+        return (
+            home_position_for_hand(hand, args),
+            ik_wrist_orientation_quat(args, hand=hand),
+            "home",
+        )
+
+    remembered_position, remembered_orientation = remembered_start
+    return (
+        checked_position(remembered_position).copy(),
+        normalize_quaternion(remembered_orientation),
+        "last_published_target",
+    )
 
 
 def publish_latest_request_ik_target(
@@ -77,14 +105,20 @@ def publish_latest_request_ik_target(
     target = targets[index]
     hand = select_ik_hand(target.base_xyz, args.ik_hand)
     grip_result: dict[str, Any] = {"confirmed": False, "hand": None, "status": ""}
-    start_position = home_position_for_hand(hand, args)
-    start_orientation = ik_wrist_orientation_quat(args)
+    start_position, start_orientation, start_source = resolve_grasp_start_pose(
+        publisher,
+        hand,
+        args,
+    )
+    tilt_deg = ik_downward_tilt_deg_for_hand(args, hand)
+    tilt_y_deg = ik_downward_tilt_y_deg_for_hand(args, hand)
     publisher.begin_joint_trajectory_csv_recording(hand)
 
     relative_pick_waypoints = pick_template_for_target(target, hand, pick_templates)
     print(
         "[request_ik_tester] grasp request "
         f"label={target.label!r} hand={hand} "
+        f"start={start_source} "
         f"tool_template={'hit' if relative_pick_waypoints is not None else 'miss'} "
         f"ik_target_stage={args.ik_target_stage}",
         flush=True,
@@ -96,14 +130,14 @@ def publish_latest_request_ik_target(
     if relative_pick_waypoints is not None:
         try:
             pick_waypoints = build_pick_template_waypoints(
-                target, relative_pick_waypoints, args
+                target, relative_pick_waypoints, args, hand=hand
             )
             print(
                 "[tool_template] using YAML xyz only; YAML quaternions ignored, "
                 "fixed orientation + downward tilt applied "
                 f"base_quat={format_quat(start_orientation)} "
-                f"tilt={args.ik_downward_tilt_deg:.2f}deg/"
-                f"{args.ik_downward_tilt_axis}+y={args.ik_downward_tilt_y_deg:.2f}deg/"
+                f"tilt={tilt_deg:.2f}deg/"
+                f"{args.ik_downward_tilt_axis}+y={tilt_y_deg:.2f}deg/"
                 f"{args.ik_downward_tilt_frame}",
                 flush=True,
             )
@@ -138,6 +172,7 @@ def publish_latest_request_ik_target(
                     args,
                     start_position_xyz=start_position,
                     start_orientation_xyzw=start_orientation,
+                    terminal_slowdown=True,
                 )
             else:
                 print(
@@ -153,6 +188,8 @@ def publish_latest_request_ik_target(
                     args,
                     start_position_xyz=start_position,
                     start_orientation_xyzw=start_orientation,
+                    final_hold_sec=0.0,
+                    terminal_slowdown=True,
                 )
                 grasp_path_artifacts = save_request_ik_grasp_path_artifacts(
                     publisher, target, hand, args
@@ -198,7 +235,7 @@ def publish_latest_request_ik_target(
     if not used_pick_template:
         try:
             gripper_pose, template, grasp_fallback_reason = make_gripper_target_pose(
-                target, args
+                target, args, hand=hand
             )
             fallback_reason = fallback_reason or grasp_fallback_reason
             position = gripper_pose[:3, 3].copy()
@@ -211,6 +248,8 @@ def publish_latest_request_ik_target(
                 args,
                 start_position_xyz=start_position,
                 start_orientation_xyzw=start_orientation,
+                final_hold_sec=0.0,
+                terminal_slowdown=True,
             )
             print(
                 "[computed_grasp] target reached; sending grip command "
@@ -261,8 +300,8 @@ def publish_latest_request_ik_target(
         f"template_raw_pose={used_pick_template} "
         f"use_flowpose_rotation={bool(args.use_flowpose_grasp_rotation)} "
         f"tcp_offset={format_xyz(np.asarray(args.ik_grasp_tcp_offset_m, dtype=np.float64))} "
-        f"tilt={args.ik_downward_tilt_deg:.2f}deg/"
-        f"{args.ik_downward_tilt_axis}+y={args.ik_downward_tilt_y_deg:.2f}deg/"
+        f"tilt={tilt_deg:.2f}deg/"
+        f"{args.ik_downward_tilt_axis}+y={tilt_y_deg:.2f}deg/"
         f"{args.ik_downward_tilt_frame}",
         flush=True,
     )
@@ -354,7 +393,7 @@ def execute_grip_at_pose(
     settle_sec = max(
         float(getattr(args, "grip_settle_sec", DEFAULT_GRIP_SETTLE_SEC)), 0.0
     )
-    pre_grip_hold_sec = max(settle_sec, 0.05)
+    pre_grip_hold_sec = settle_sec
     post_confirm_hold_sec = max(
         float(getattr(args, "grip_post_confirm_hold_sec", 0.0)),
         0.0,
@@ -376,8 +415,15 @@ def execute_grip_at_pose(
         )
     else:
         count += publisher.hold_target(hand, position, orientation, pre_grip_hold_sec)
+    endpoints = gripper_receiver_args(args, hand=hand)
+    endpoint_text = ", ".join(
+        f"{label}:127.0.0.1:{endpoint_args.grip_signal_port}->{endpoint_args.gripper_server}"
+        for label, endpoint_args in endpoints
+    )
+    print(f"[grip] sending close command hand={hand} endpoint={endpoint_text}", flush=True)
     gripper_status = send_gripper_signal("grip", args, hand=hand)
-    if "GRASP_FAILED_MIN_LIMIT" in gripper_status:
+    print(f"[grip] close command result hand={hand}: {gripper_status}", flush=True)
+    if any(token in gripper_status for token in GRIP_MIN_LIMIT_TOKENS):
         raise GripFailedMinLimit(gripper_status)
     if "ERR " in gripper_status or "failed exit_code=" in gripper_status:
         raise GripCommandFailed(gripper_status)
