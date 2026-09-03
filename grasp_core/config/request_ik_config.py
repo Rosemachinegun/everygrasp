@@ -42,8 +42,7 @@ DEFAULT_ROBOT_XACRO_PATH = PROJECT_ROOT / "config" / "stand_v3.urf.xacro"
 
 
 DEFAULT_TOOL_TEMPLATE_PATH = PROJECT_ROOT / "config" / "tool.yaml"
-DEFAULT_SAM3_ROI_XYXY = (249, 9, 589, 326)
-
+DEFAULT_SAM3_ROI_XYXY = (161, 9, 504, 343)
 
 @dataclass(frozen=True)
 class GripSignalDefaults:
@@ -82,10 +81,10 @@ class GripperDefaults:
     right_max_pos: int = 1000
     left_grip_speed: int = 60
     right_grip_speed: int = 60
-    left_grip_torque: int = 30
-    right_grip_torque: int = 30
-    left_hold_torque: int = 18
-    right_hold_torque: int = 18
+    left_grip_torque: int = 40
+    right_grip_torque: int = 40
+    left_hold_torque: int = 20
+    right_hold_torque: int = 20
     left_current_threshold: int = 120
     right_current_threshold: int = 120
     left_poll_interval: float = 0.05
@@ -96,8 +95,8 @@ class GripperDefaults:
     right_progress_epsilon: int = 2
     left_stall_samples: int = 5
     right_stall_samples: int = 5
-    left_empty_grip_margin: int = 150
-    right_empty_grip_margin: int = 0
+    left_empty_grip_margin: int = 50
+    right_empty_grip_margin: int = 50
     left_target_pos_tolerance: int = 120
     right_target_pos_tolerance: int = 120
     left_timeout: float = 5.0
@@ -705,7 +704,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--prompts", default="toy,yellow_screwdriver_handle")
+    parser.add_argument("--prompts", default="toy,yellow_screwdriver_handle,pen")
     parser.add_argument("--sam3-checkpoint-path", default="/model/sam3.pt")
     parser.add_argument("--sam3-root", default=None)
     parser.add_argument(

@@ -39,12 +39,12 @@ def make_dashboard(
     sam_panel = (
         fit_panel(sam_bgr, panel_w, panel_h)
         if sam_bgr is not None
-        else empty_panel(panel_w, panel_h, "SAM3", "Press R to capture and segment")
+        else empty_panel(panel_w, panel_h, "SAM3", "Press A or Z to capture and segment")
     )
     flowpose_panel = (
         fit_panel(flowpose_bgr, panel_w, panel_h)
         if flowpose_bgr is not None
-        else empty_panel(panel_w, panel_h, "FlowPose", "Press F after SAM3 finishes")
+        else empty_panel(panel_w, panel_h, "FlowPose", "Press B after SAM3 finishes")
     )
 
     annotate_panel(live_panel, "RealSense Live", PANEL_COLORS["live"])
@@ -56,7 +56,8 @@ def make_dashboard(
     footer = np.full((footer_h, body.shape[1], 3), 26, dtype=np.uint8)
     put_text = "auto put on" if put_enabled else "auto put off"
     text = (
-        f"C: target | S: pause/resume | H/J: right/left home | L/P: grip/release selected or both | "
+        f"A:auto grasp | Z:SAM3+FlowPose | B:FlowPose | C:target | S:pause | "
+        f"H/J:home | L/P:grip/release | "
         f"{put_text} | Q/Esc: quit | "
         f"SAM3 pending={sam_pending} FlowPose pending={flowpose_pending} | {status}"
     )

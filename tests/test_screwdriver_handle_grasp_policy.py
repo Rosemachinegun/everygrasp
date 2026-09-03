@@ -6,7 +6,9 @@ from grasp_core.core.pose_math import quaternion_to_rotation_matrix
 from grasp_core.core.robot_target_pose import TargetObjectPose
 from grasp_core.planning.grasp_pose import make_gripper_target_pose
 from grasp_core.planning.tool_pick_templates import build_pick_template_waypoints
+import grasp_core.tasks.screwdriver_handle_grasp_policy as screwdriver_policy
 from grasp_core.tasks.screwdriver_handle_grasp_policy import (
+    LongObjectGraspPolicy,
     approach_axis_from_orientation,
     build_screwdriver_handle_pick_waypoints,
     closing_axis_from_orientation,
@@ -313,6 +315,63 @@ def test_screwdriver_handle_captures_close_perpendicular_to_flowpose_x_long_axis
         assert abs(float(abs(closing_axis @ metadata.object_pose[:3, 0]) - 1.0)) < 1e-8
 
 
+def test_pen_uses_screwdriver_handle_long_object_policy_by_default() -> None:
+    target = make_screwdriver_target(long_axis=np.array([1.0, 0.0, 0.0]), label="pen")
+
+    result = make_screwdriver_handle_gripper_pose(
+        target,
+        args(
+            ik_downward_tilt_right_deg=45.0,
+            ik_downward_tilt_y_right_deg=45.0,
+            ik_downward_tilt_axis="z",
+        ),
+        hand="right",
+    )
+
+    assert result is not None
+    gripper_pose, metadata = result
+    closing_axis = closing_axis_from_orientation(gripper_pose[:3, :3])
+    assert metadata.closing_axis_name == "x"
+    assert metadata.closing_axis_index == 0
+    assert abs(float(closing_axis @ metadata.long_axis)) < 1e-8
+    assert abs(float(abs(closing_axis @ metadata.object_pose[:3, 0]) - 1.0)) < 1e-8
+
+
+def test_pen_closing_axis_can_be_configured_to_policy_y(monkeypatch) -> None:
+    target = make_screwdriver_target(long_axis=np.array([1.0, 0.0, 0.0]), label="pen")
+    monkeypatch.setattr(
+        screwdriver_policy,
+        "LONG_OBJECT_POLICIES",
+        (
+            LongObjectGraspPolicy(
+                keyword="screwdriver_handle",
+                closing_axis="x",
+            ),
+            LongObjectGraspPolicy(
+                keyword="pen",
+                closing_axis="y",
+            ),
+        ),
+    )
+
+    result = make_screwdriver_handle_gripper_pose(
+        target,
+        args(
+            ik_downward_tilt_right_deg=45.0,
+            ik_downward_tilt_y_right_deg=45.0,
+            ik_downward_tilt_axis="z",
+        ),
+        hand="right",
+    )
+
+    assert result is not None
+    gripper_pose, metadata = result
+    closing_axis = closing_axis_from_orientation(gripper_pose[:3, :3])
+    assert metadata.closing_axis_name == "y"
+    assert metadata.closing_axis_index == 1
+    assert abs(float(abs(closing_axis @ metadata.long_axis) - 1.0)) < 1e-8
+
+
 def test_generic_template_path_is_unchanged() -> None:
     target = make_target("yellow_cube")
     relative_waypoints = [(np.array([0.0, 0.0, 0.1]), (0.0, 0.0, 0.0, 1.0), 0.0)]
@@ -355,7 +414,10 @@ def args(**overrides) -> Namespace:
     return Namespace(**values)
 
 
-def make_screwdriver_target(long_axis: np.ndarray) -> TargetObjectPose:
+def make_screwdriver_target(
+    long_axis: np.ndarray,
+    label: str = "red_screwdriver_handle",
+) -> TargetObjectPose:
     pose = np.eye(4)
     x_axis = long_axis / np.linalg.norm(long_axis)
     y_axis = np.cross([0.0, 0.0, 1.0], x_axis)
@@ -364,8 +426,8 @@ def make_screwdriver_target(long_axis: np.ndarray) -> TargetObjectPose:
     pose[:3, :3] = np.column_stack((x_axis, y_axis, z_axis))
     pose[:3, 3] = [0.2, 0.1, 0.8]
     return TargetObjectPose(
-        label="red_screwdriver_handle",
-        frame_id="red_screwdriver_handle_1",
+        label=label,
+        frame_id=f"{label}_1",
         camera_pose=np.eye(4),
         base_pose=pose,
         size=np.array([0.02, 0.12, 0.02]),

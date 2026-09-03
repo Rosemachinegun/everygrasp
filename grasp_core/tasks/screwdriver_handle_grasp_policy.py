@@ -48,10 +48,33 @@ from grasp_core.core.robot_target_pose import (
 )
 
 
-LONG_OBJECT_KEYWORDS = (
-    "screwdriver_handle",
-    "pen",
+@dataclass(frozen=True)
+class LongObjectGraspPolicy:
+    """Per-object grasp policy knobs for long, thin objects.
+
+    closing_axis is in the reconstructed policy frame and must be "x" or "y":
+        x -> close across the object, perpendicular to the long axis
+        y -> close along the object long axis
+    """
+
+    keyword: str
+    closing_axis: str
+
+
+LONG_OBJECT_POLICIES = (
+    LongObjectGraspPolicy(
+        keyword="screwdriver_handle",
+        closing_axis="x",
+    ),
+    LongObjectGraspPolicy(
+        keyword="pen",
+        closing_axis="y",
+    ),
 )
+POLICY_AXIS_INDEX_BY_NAME = {
+    "x": 0,
+    "y": 1,
+}
 HAND_SIDE_EPS = 1e-8
 
 WORLD_X_AXIS = np.asarray(
@@ -101,20 +124,50 @@ class ScrewdriverHandleGraspPolicyResult:
     long_axis: np.ndarray
 
     long_axis_index: int
+    closing_axis_name: str
+    closing_axis_index: int
+    closing_axis: np.ndarray
 
     yaw_deg: float
     tilt_y_deg: float
 
 
-def is_screwdriver_handle_object(object_type: str) -> bool:
-    """Return True for supported screwdriver/pen style long objects."""
+def long_object_grasp_policy_for_object(
+    object_type: str,
+) -> LongObjectGraspPolicy | None:
+    """Return grasp policy config for supported screwdriver/pen style objects."""
 
     normalized_type = normalize_object_type(object_type)
 
-    return any(
-        keyword in normalized_type
-        for keyword in LONG_OBJECT_KEYWORDS
-    )
+    for policy in LONG_OBJECT_POLICIES:
+        if policy.keyword in normalized_type:
+            validate_policy_axis_name(policy.closing_axis)
+            return policy
+
+    return None
+
+
+def validate_policy_axis_name(axis_name: str) -> None:
+    """Raise if an object policy uses an unsupported closing axis."""
+
+    if axis_name not in POLICY_AXIS_INDEX_BY_NAME:
+        raise ValueError(
+            f"unsupported long-object closing axis {axis_name!r}; "
+            "expected 'x' or 'y'"
+        )
+
+
+def policy_axis_index(axis_name: str) -> int:
+    """Return reconstructed policy-frame axis index for "x"/"y"."""
+
+    validate_policy_axis_name(axis_name)
+    return POLICY_AXIS_INDEX_BY_NAME[axis_name]
+
+
+def is_screwdriver_handle_object(object_type: str) -> bool:
+    """Return True for supported screwdriver/pen style long objects."""
+
+    return long_object_grasp_policy_for_object(object_type) is not None
 
 
 def make_screwdriver_handle_gripper_pose(
@@ -128,7 +181,8 @@ def make_screwdriver_handle_gripper_pose(
 ] | None:
     """Construct the gripper target pose for a screwdriver handle."""
 
-    if not is_screwdriver_handle_object(target.label):
+    policy = long_object_grasp_policy_for_object(target.label)
+    if policy is None:
         return None
 
     side_sign = side_sign_for_hand(hand)
@@ -150,6 +204,8 @@ def make_screwdriver_handle_gripper_pose(
     # object_pose[:, 2] = world +Z
     side_axis = object_pose[:3, 0].copy()
     long_axis = object_pose[:3, 1].copy()
+    closing_axis_index = policy_axis_index(policy.closing_axis)
+    closing_axis = object_pose[:3, closing_axis_index].copy()
 
     gripper_pose = np.eye(4, dtype=np.float64)
     gripper_pose[:3, 3] = object_pose[:3, 3]
@@ -158,7 +214,7 @@ def make_screwdriver_handle_gripper_pose(
         screwdriver_handle_wrist_orientation(
             args,
             hand=hand,
-            side_axis=side_axis,
+            closing_axis=closing_axis,
         )
     )
 
@@ -184,6 +240,9 @@ def make_screwdriver_handle_gripper_pose(
             side_axis=side_axis,
             long_axis=long_axis,
             long_axis_index=POLICY_LONG_AXIS_INDEX,
+            closing_axis_name=policy.closing_axis,
+            closing_axis_index=closing_axis_index,
+            closing_axis=closing_axis,
             yaw_deg=yaw_deg,
             tilt_y_deg=tilt_y_deg,
         ),
@@ -211,7 +270,8 @@ def build_screwdriver_handle_pick_waypoints(
         relative Z -> vertical offset
     """
 
-    if not is_screwdriver_handle_object(target.label):
+    policy = long_object_grasp_policy_for_object(target.label)
+    if policy is None:
         return None
 
     if not relative_waypoints:
@@ -232,7 +292,8 @@ def build_screwdriver_handle_pick_waypoints(
             f"{fallback_reason}"
         )
 
-    side_axis = object_pose[:3, 0].copy()
+    closing_axis_index = policy_axis_index(policy.closing_axis)
+    closing_axis = object_pose[:3, closing_axis_index].copy()
 
     gripper_pose = np.eye(4, dtype=np.float64)
 
@@ -240,7 +301,7 @@ def build_screwdriver_handle_pick_waypoints(
         screwdriver_handle_wrist_orientation(
             args,
             hand=hand,
-            side_axis=side_axis,
+            closing_axis=closing_axis,
         )[0]
     )
 
@@ -458,11 +519,11 @@ def screwdriver_handle_wrist_orientation(
     args: argparse.Namespace,
     *,
     hand: str,
-    side_axis: np.ndarray,
+    closing_axis: np.ndarray,
 ) -> tuple[np.ndarray, float, float]:
     """Construct screwdriver wrist orientation.
 
-    The gripper closing axis is aligned with the policy lateral direction,
+    The gripper closing axis is aligned with the configured policy X/Y axis,
     while the shared Y-axis downward tilt is preserved.
     """
 
@@ -472,7 +533,7 @@ def screwdriver_handle_wrist_orientation(
 
     yaw_deg = screwdriver_handle_yaw_deg(
         base_rotation,
-        side_axis,
+        closing_axis,
         reference_yaw_deg=(
             ik_downward_tilt_deg_for_hand(
                 args,
@@ -521,15 +582,11 @@ def screwdriver_handle_wrist_orientation(
 
 def screwdriver_handle_yaw_deg(
     base_rotation: np.ndarray,
-    side_axis: np.ndarray,
+    closing_axis: np.ndarray,
     *,
     reference_yaw_deg: float = 0.0,
 ) -> float:
-    """Compute yaw that aligns the gripper closing axis with the lateral axis.
-
-    Because the gripper closing axis must be perpendicular to the screwdriver
-    long axis, this chooses a closing
-    direction perpendicular to the screwdriver long axis.
+    """Compute yaw that aligns the gripper closing axis with a policy axis.
 
     Two orientations separated by 180 degrees describe the same parallel
     closing-axis line.  The orientation closest to the hand-specific
@@ -537,7 +594,7 @@ def screwdriver_handle_yaw_deg(
     """
 
     desired_closing = normalized(
-        side_axis,
+        closing_axis,
     )
 
     desired_in_base_wrist = (

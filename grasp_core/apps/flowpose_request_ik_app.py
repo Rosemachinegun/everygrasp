@@ -68,6 +68,7 @@ KEY_QUIT = {ord("q"), 27}
 KEY_CAPTURE = ord("a")
 KEY_FLOWPOSE = ord("b")
 KEY_TARGET = ord("c")
+KEY_PERCEPTION_PIPELINE = ord("z")
 KEY_RIGHT_HOME = ord("h")
 KEY_LEFT_HOME = ord("j")
 KEY_GRIP = ord("l")
@@ -114,6 +115,7 @@ class RuntimeState:
     retry_will_regrasp: bool = False
     replan_pending: bool = False
     pipeline_stage: PipelineStage = PipelineStage.IDLE
+    pipeline_grasp_on_done: bool = True
     grasp_confirmed: bool = False
     grasp_confirmed_hand: str | None = None
     grasp_confirmed_label: str | None = None
@@ -679,8 +681,8 @@ class GraspDemoApp:
             )
             self.publish_grasp()
 
-    def start_pipeline(self) -> None:
-        """Start one-key capture -> SAM3 -> FlowPose -> grasp sequence."""
+    def start_pipeline(self, *, grasp_on_done: bool = True) -> None:
+        """Start one-key capture -> SAM3 -> FlowPose, optionally followed by grasp."""
         s = self.state
         if (
             s.pipeline_stage is not PipelineStage.IDLE
@@ -698,10 +700,12 @@ class GraspDemoApp:
             return
 
         self.reset_retry(reset_attempts=True)
+        s.pipeline_grasp_on_done = grasp_on_done
         s.pipeline_stage = PipelineStage.SAM3
         self.submit_sam3(bundle)
         if s.sam_future is None:
             s.pipeline_stage = PipelineStage.IDLE
+            s.pipeline_grasp_on_done = True
 
     def advance_pipeline(self) -> None:
         """Advance the one-key workflow as soon as each async result is ready."""
@@ -713,6 +717,7 @@ class GraspDemoApp:
             if s.sam_result is None:
                 s.pipeline_stage = PipelineStage.IDLE
                 s.status = "Pipeline stopped: SAM3 produced no result"
+                s.pipeline_grasp_on_done = True
                 return
 
             s.pipeline_stage = PipelineStage.FLOWPOSE
@@ -727,9 +732,15 @@ class GraspDemoApp:
             s.pipeline_stage = PipelineStage.IDLE
             if not s.base_targets:
                 s.status = "Pipeline stopped: FlowPose produced no target"
+                s.pipeline_grasp_on_done = True
                 return
 
-            self.publish_grasp()
+            if s.pipeline_grasp_on_done:
+                s.pipeline_grasp_on_done = True
+                self.publish_grasp()
+            else:
+                s.pipeline_grasp_on_done = True
+                s.status = f"Pipeline done: FlowPose produced {len(s.base_targets)} target(s)"
 
     def render(self, bundle) -> None:
         """Render the live camera, SAM3 overlay and FlowPose overlay."""
@@ -787,7 +798,7 @@ class GraspDemoApp:
 
         if key == KEY_CAPTURE:
             if self.auto_pipeline_on_a():
-                self.start_pipeline()
+                self.start_pipeline(grasp_on_done=True)
             else:
                 fresh_bundle = self.camera.read_latest()
                 if fresh_bundle is None:
@@ -795,6 +806,8 @@ class GraspDemoApp:
                 else:
                     self.reset_retry(reset_attempts=True)
                     self.submit_sam3(fresh_bundle)
+        elif key == KEY_PERCEPTION_PIPELINE:
+            self.start_pipeline(grasp_on_done=False)
         elif key == KEY_FLOWPOSE and not self.auto_pipeline_on_a():
             self.reset_retry()
             self.submit_flowpose()
