@@ -24,7 +24,8 @@ from grasp_core.core.pose_math import (
 )
 from grasp_core.core.robot_target_pose import matrix_to_quaternion
 
-FIXED_PUT_RIGHT_XYZ = (0.54, -0.30, 0.826)
+FIXED_PUT_RIGHT_XYZ = (0.45, -0.34, 0.826)
+FIXED_PUT_LEFT_XYZ = (0.45, 0.34, 0.826)
 # FIXED_PUT_RIGHT_XYZ = (0.54, -0.30, 0.776)
 FIXED_PUT_OBJECT_RIGHT_XYZ = {
     "yellow_cube": (0.40, -0.40, 0.86),
@@ -136,7 +137,9 @@ def fixed_put_xyz_for_hand(
                 hand_name,
             )
 
-    return mirror_right_xyz_for_hand(FIXED_PUT_RIGHT_XYZ, hand_name)
+    if hand_name == "left":
+        return FIXED_PUT_LEFT_XYZ
+    return FIXED_PUT_RIGHT_XYZ
 
 
 def normalize_hand(hand: str) -> str:
